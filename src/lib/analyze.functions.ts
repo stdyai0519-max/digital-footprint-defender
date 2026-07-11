@@ -6,6 +6,10 @@ import {
   VISIBILITY_LABELS,
   type AnalysisResponse,
   type AnalysisResult,
+  type Certainty,
+  type DirectExposure,
+  type InferredExposure,
+  type SafeRewrite,
   type Visibility,
 } from "./analyze";
 
