@@ -23,6 +23,20 @@ interface Candidate {
   source: Source;
 }
 
+export interface ImageGuardSnapshot {
+  hasImage: boolean;
+  status: Status;
+  candidateCount: number;
+  selectedCount: number;
+  categories: string[];
+}
+
+interface ImageGuardProps {
+  embedded?: boolean;
+  scanSignal?: number;
+  onSnapshotChange?: (snapshot: ImageGuardSnapshot) => void;
+}
+
 type Status =
   | "idle"
   | "image-loading"
@@ -105,7 +119,11 @@ function classify(word: { text: string; box: Box; conf: number }): RawMatch[] {
 
 /* ---------------- Component ---------------- */
 
-export default function ImageGuard() {
+export default function ImageGuard({
+  embedded = false,
+  scanSignal = 0,
+  onSnapshotChange,
+}: ImageGuardProps) {
   const [imgUrl, setImgUrl] = useState<string | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [imgSize, setImgSize] = useState<{ w: number; h: number } | null>(null);
@@ -133,6 +151,7 @@ export default function ImageGuard() {
     active: boolean;
   } | null>(null);
   const [, forceTick] = useState(0);
+  const lastScanSignal = useRef(scanSignal);
 
   /* -------- upload -------- */
 
@@ -289,6 +308,14 @@ export default function ImageGuard() {
       );
     }
   }
+
+  useEffect(() => {
+    if (scanSignal === lastScanSignal.current) return;
+    lastScanSignal.current = scanSignal;
+    if (imgRef.current && imgSize) void runOcr();
+    // scanSignal is an imperative request from the unified composer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanSignal, imgSize]);
 
   /* -------- history -------- */
   function pushHistory() {
@@ -511,10 +538,41 @@ export default function ImageGuard() {
     [candidates],
   );
 
+  const categories = useMemo(
+    () => Array.from(new Set(candidates.map((c) => c.category))),
+    [candidates],
+  );
+
+  useEffect(() => {
+    onSnapshotChange?.({
+      hasImage: Boolean(imgUrl && imgSize),
+      status,
+      candidateCount: candidates.length,
+      selectedCount,
+      categories,
+    });
+  }, [
+    categories,
+    candidates.length,
+    imgSize,
+    imgUrl,
+    onSnapshotChange,
+    selectedCount,
+    status,
+  ]);
+
   return (
     <div className="space-y-5">
-      <section className="rounded-2xl border border-border bg-card p-5 sm:p-6">
-        <h2 className="text-lg font-bold">이미지 개인정보 가리기</h2>
+      <section
+        className={
+          embedded
+            ? "rounded-xl border border-border bg-muted/20 p-4"
+            : "rounded-2xl border border-border bg-card p-5 sm:p-6"
+        }
+      >
+        <h2 className={embedded ? "text-sm font-semibold" : "text-lg font-bold"}>
+          사진 첨부 (선택)
+        </h2>
         <p className="mt-1 text-sm text-muted-foreground">
           사진 속 전화번호, 주소, 학교명 등 개인정보 후보를 기기 안에서 찾아
           가릴 수 있습니다.
@@ -569,17 +627,27 @@ export default function ImageGuard() {
         <>
           <section className="rounded-2xl border border-border bg-card p-4">
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={runOcr}
-                disabled={status === "ocr-loading" || status === "ocr-running"}
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50"
-              >
-                {status === "ocr-loading"
-                  ? "OCR 준비 중..."
-                  : status === "ocr-running"
-                    ? `분석 중 ${progress}%`
-                    : "개인정보 후보 찾기"}
-              </button>
+              {!embedded && (
+                <button
+                  onClick={runOcr}
+                  disabled={status === "ocr-loading" || status === "ocr-running"}
+                  className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50"
+                >
+                  {status === "ocr-loading"
+                    ? "OCR 준비 중..."
+                    : status === "ocr-running"
+                      ? `분석 중 ${progress}%`
+                      : "개인정보 후보 찾기"}
+                </button>
+              )}
+              {embedded &&
+                (status === "ocr-loading" || status === "ocr-running") && (
+                  <span className="rounded-lg bg-primary/10 px-3 py-2 text-xs font-medium text-primary">
+                    {status === "ocr-loading"
+                      ? "이미지 분석 준비 중..."
+                      : `이미지 분석 중 ${progress}%`}
+                  </span>
+                )}
               <button
                 onClick={undo}
                 disabled={history.length === 0}
@@ -852,3 +920,4 @@ function renderProcessed(
     }
   }
 }
+

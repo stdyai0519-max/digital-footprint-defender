@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { lazy, Suspense, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useMemo, useState } from "react";
 import {
   DEMO_RESULT,
   EXAMPLE_POST,
@@ -12,10 +12,9 @@ import {
   type Visibility,
 } from "../lib/analyze";
 import { analyzeFootprint } from "../lib/analyze.functions";
+import type { ImageGuardSnapshot } from "../components/ImageGuard";
 
 const ImageGuard = lazy(() => import("../components/ImageGuard"));
-
-type Tab = "text" | "image";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -40,22 +39,41 @@ export const Route = createFileRoute("/")({
 const VISIBILITIES: Visibility[] = ["public", "friends", "group", "dm"];
 
 function Home() {
-  const [tab, setTab] = useState<Tab>("text");
   const [text, setText] = useState("");
   const [visibility, setVisibility] = useState<Visibility>("public");
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<AnalysisResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [scanSignal, setScanSignal] = useState(0);
+  const [imageSnapshot, setImageSnapshot] = useState<ImageGuardSnapshot>({
+    hasImage: false,
+    status: "idle",
+    candidateCount: 0,
+    selectedCount: 0,
+    categories: [],
+  });
 
   const analyze = useServerFn(analyzeFootprint);
 
   const charCount = text.length;
   const overLimit = charCount > MAX_INPUT_LENGTH;
-  const canAnalyze = text.trim().length > 0 && !overLimit && !loading;
+  const imageLoading =
+    imageSnapshot.status === "image-loading" ||
+    imageSnapshot.status === "ocr-loading" ||
+    imageSnapshot.status === "ocr-running";
+  const combinedLoading = loading || imageLoading;
+  const canAnalyze =
+    (text.trim().length > 0 || imageSnapshot.hasImage) &&
+    !overLimit &&
+    !combinedLoading;
+
+  const handleImageSnapshot = useCallback((snapshot: ImageGuardSnapshot) => {
+    setImageSnapshot(snapshot);
+  }, []);
 
   async function handleAnalyze() {
-    if (!text.trim()) {
-      setError("분석할 게시글을 먼저 입력해 주세요.");
+    if (!text.trim() && !imageSnapshot.hasImage) {
+      setError("게시글을 입력하거나 사진을 첨부해 주세요.");
       return;
     }
     if (overLimit) {
@@ -63,8 +81,10 @@ function Home() {
       return;
     }
     setError(null);
-    setLoading(true);
     setResponse(null);
+    if (imageSnapshot.hasImage) setScanSignal((value) => value + 1);
+    if (!text.trim()) return;
+    setLoading(true);
     try {
       const r = await analyze({ data: { text, visibility } });
       setResponse(r);
@@ -119,71 +139,41 @@ function Home() {
           </p>
         </section>
 
-        <div
-          role="tablist"
-          className="mb-6 inline-flex rounded-lg border border-border bg-card p-1"
-        >
-          {(
-            [
-              { id: "text" as const, label: "게시글 개인정보 점검" },
-              { id: "image" as const, label: "이미지 개인정보 가리기" },
-            ]
-          ).map((t) => (
-            <button
-              key={t.id}
-              role="tab"
-              aria-selected={tab === t.id}
-              onClick={() => setTab(t.id)}
-              className={
-                "rounded-md px-3 py-1.5 text-sm transition " +
-                (tab === t.id
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground")
-              }
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-
-        {tab === "text" && (
-          <>
-            <InputPanel
-              text={text}
-              onText={setText}
-              visibility={visibility}
-              onVisibility={setVisibility}
-              charCount={charCount}
-              overLimit={overLimit}
-              onExample={() => {
-                setText(EXAMPLE_POST);
-                setError(null);
-              }}
-              onAnalyze={handleAnalyze}
-              canAnalyze={canAnalyze}
-              loading={loading}
-              error={error}
-            />
-
-            {loading && <LoadingCard />}
-
-            {response && (
-              <ResultView response={response} onReset={handleReset} />
-            )}
-          </>
-        )}
-
-        {tab === "image" && (
+        <InputPanel
+          text={text}
+          onText={setText}
+          visibility={visibility}
+          onVisibility={setVisibility}
+          charCount={charCount}
+          overLimit={overLimit}
+          onExample={() => {
+            setText(EXAMPLE_POST);
+            setError(null);
+          }}
+          onAnalyze={handleAnalyze}
+          canAnalyze={canAnalyze}
+          loading={combinedLoading}
+          error={error}
+          imageEditor={
           <Suspense
             fallback={
-              <div className="rounded-2xl border border-border bg-card p-6 text-sm text-muted-foreground">
+              <div className="rounded-xl border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
                 이미지 편집기를 불러오는 중...
               </div>
             }
           >
-            <ImageGuard />
+            <ImageGuard
+              embedded
+              scanSignal={scanSignal}
+              onSnapshotChange={handleImageSnapshot}
+            />
           </Suspense>
-        )}
+          }
+        />
+
+        {combinedLoading && <LoadingCard />}
+
+        {response && <ResultView response={response} onReset={handleReset} />}
 
         <footer className="mt-16 border-t border-border/60 pt-6 text-[11px] text-muted-foreground">
           Footprint Guard는 게시 전 참고용 보조 도구입니다. 입력한 게시글과
@@ -208,6 +198,7 @@ function InputPanel(props: {
   canAnalyze: boolean;
   loading: boolean;
   error: string | null;
+  imageEditor: React.ReactNode;
 }) {
   return (
     <section className="rounded-2xl border border-border bg-card p-5 sm:p-6">
@@ -236,6 +227,8 @@ function InputPanel(props: {
           가상 예시 불러오기
         </button>
       </div>
+
+      <div className="mt-5">{props.imageEditor}</div>
 
       <div className="mt-5">
         <div className="text-sm font-medium mb-2">게시 범위</div>
@@ -274,7 +267,7 @@ function InputPanel(props: {
           disabled={!props.canAnalyze}
           className="inline-flex items-center justify-center rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {props.loading ? "분석 중..." : "분석하기"}
+          {props.loading ? "게시물 단서를 확인하는 중..." : "게시 전 개인정보 점검"}
         </button>
       </div>
     </section>
@@ -286,7 +279,7 @@ function LoadingCard() {
     <div className="mt-6 rounded-2xl border border-border bg-card p-6 text-sm text-muted-foreground">
       <div className="flex items-center gap-3">
         <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-primary" />
-        디지털 발자국을 분석하고 있습니다...
+        게시물 단서를 확인하는 중입니다. 이미지 OCR은 기기 안에서 처리됩니다.
       </div>
     </div>
   );
@@ -578,3 +571,4 @@ function ShieldMark() {
     </div>
   );
 }
+
