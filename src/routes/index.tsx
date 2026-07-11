@@ -40,6 +40,7 @@ export const Route = createFileRoute("/")({
 const VISIBILITIES: Visibility[] = ["public", "friends", "group", "dm"];
 
 function Home() {
+  const [tab, setTab] = useState<Tab>("text");
   const [text, setText] = useState("");
   const [visibility, setVisibility] = useState<Visibility>("public");
   const [loading, setLoading] = useState(false);
