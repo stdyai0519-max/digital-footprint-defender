@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import {
   DEMO_RESULT,
   EXAMPLE_POST,
@@ -12,6 +12,10 @@ import {
   type Visibility,
 } from "../lib/analyze";
 import { analyzeFootprint } from "../lib/analyze.functions";
+
+const ImageGuard = lazy(() => import("../components/ImageGuard"));
+
+type Tab = "text" | "image";
 
 export const Route = createFileRoute("/")({
   head: () => ({
