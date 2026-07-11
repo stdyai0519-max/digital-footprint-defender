@@ -6,6 +6,12 @@ describe("post analysis helpers", () => {
     expect(extractMentions("@minsu와 @jisu, 다시 @minsu")).toEqual(["@minsu", "@jisu"]);
   });
 
+  test("does not mistake an email domain or trailing punctuation for a mention", () => {
+    expect(extractMentions("문의는 guard@example.com, 친구는 @minsu.에게 해주세요")).toEqual([
+      "@minsu",
+    ]);
+  });
+
   test("flags two manually marked faces as third-party information", () => {
     expect(
       derivePostSignals({
@@ -13,6 +19,17 @@ describe("post analysis helpers", () => {
         hasImage: true,
         categories: ["얼굴"],
         categoryCounts: { 얼굴: 2 },
+      }).thirdPartyDetected,
+    ).toBe(true);
+  });
+
+  test("asks for ownership confirmation even when a photo contains one face", () => {
+    expect(
+      derivePostSignals({
+        text: "",
+        hasImage: true,
+        categories: ["얼굴"],
+        categoryCounts: { 얼굴: 1 },
       }).thirdPartyDetected,
     ).toBe(true);
   });

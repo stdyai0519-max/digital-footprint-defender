@@ -308,9 +308,10 @@ export default function ImageGuard({
       imgRef.current,
       imgSize,
     );
+    let worker: Awaited<ReturnType<(typeof import("tesseract.js"))["createWorker"]>> | null = null;
     try {
       const mod = await import("tesseract.js");
-      const worker = await mod.createWorker(["kor", "eng"], 1, {
+      worker = await mod.createWorker(["kor", "eng"], 1, {
         logger: (m: { status: string; progress: number }) => {
           if (m.status === "recognizing text") {
             setStatus("ocr-running");
@@ -319,7 +320,6 @@ export default function ImageGuard({
         },
       });
       const result = await worker.recognize(imgRef.current);
-      await worker.terminate();
 
       const words: { text: string; box: Box; conf: number }[] = [];
       const data = result.data as unknown as {
@@ -388,6 +388,8 @@ export default function ImageGuard({
       setErrMsg(
         "자동 글자 인식에 실패했습니다. 직접 영역 선택으로 개인정보를 가릴 수 있습니다.",
       );
+    } finally {
+      await worker?.terminate().catch(() => undefined);
     }
   }
 

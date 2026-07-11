@@ -34,7 +34,10 @@ export const AUDIENCE_GUIDANCE: AudienceGuidance[] = [
 ];
 
 export function extractMentions(text: string): string[] {
-  return Array.from(new Set(text.match(/@[A-Za-z0-9._-]+/g) ?? []));
+  const mentions = text.matchAll(
+    /(^|[^A-Za-z0-9._%+-])(@[A-Za-z0-9](?:[A-Za-z0-9_-]|\.(?=[A-Za-z0-9])){0,29})/g,
+  );
+  return Array.from(new Set(Array.from(mentions, (match) => match[2])));
 }
 
 export function derivePostSignals(input: {
@@ -47,7 +50,7 @@ export function derivePostSignals(input: {
   const faceCount = input.categoryCounts["얼굴"] ?? 0;
   const thirdPartyDetected =
     mentions.length > 0 ||
-    faceCount >= 2 ||
+    faceCount >= 1 ||
     input.categories.some((category) => ["명찰·신분증", "연락처"].includes(category));
 
   return {
