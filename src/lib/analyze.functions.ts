@@ -63,50 +63,53 @@ function coerceStringArray(value: unknown): string[] {
   return value.filter((v): v is string => typeof v === "string" && v.length > 0);
 }
 
-function coerceDirectExposures(value: unknown): AnalysisResult["direct_exposures"] {
+function coerceDirectExposures(value: unknown): DirectExposure[] {
   if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => {
-      if (!item || typeof item !== "object") return null;
-      const o = item as Record<string, unknown>;
-      if (typeof o.text !== "string" || typeof o.category !== "string" || typeof o.reason !== "string") {
-        return null;
-      }
-      const certainty =
-        o.certainty === "명확함" || o.certainty === "문맥상 가능" || o.certainty === "확인 필요"
-          ? o.certainty
-          : undefined;
-      return { text: o.text, category: o.category, reason: o.reason, certainty };
-    })
-    .filter((v): v is AnalysisResult["direct_exposures"][number] => v !== null);
+  const out: DirectExposure[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    if (
+      typeof o.text !== "string" ||
+      typeof o.category !== "string" ||
+      typeof o.reason !== "string"
+    )
+      continue;
+    const certainty: Certainty | undefined =
+      o.certainty === "명확함" || o.certainty === "문맥상 가능" || o.certainty === "확인 필요"
+        ? (o.certainty as Certainty)
+        : undefined;
+    out.push({ text: o.text, category: o.category, reason: o.reason, certainty });
+  }
+  return out;
 }
 
-function coerceInferred(value: unknown): AnalysisResult["inferred_exposures"] {
+function coerceInferred(value: unknown): InferredExposure[] {
   if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => {
-      if (!item || typeof item !== "object") return null;
-      const o = item as Record<string, unknown>;
-      if (typeof o.inference !== "string" || typeof o.reason !== "string") return null;
-      return {
-        inference: o.inference,
-        used_clues: coerceStringArray(o.used_clues),
-        reason: o.reason,
-      };
-    })
-    .filter((v): v is AnalysisResult["inferred_exposures"][number] => v !== null);
+  const out: InferredExposure[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    if (typeof o.inference !== "string" || typeof o.reason !== "string") continue;
+    out.push({
+      inference: o.inference,
+      used_clues: coerceStringArray(o.used_clues),
+      reason: o.reason,
+    });
+  }
+  return out;
 }
 
-function coerceRewrites(value: unknown): AnalysisResult["safe_rewrites"] {
+function coerceRewrites(value: unknown): SafeRewrite[] {
   if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => {
-      if (!item || typeof item !== "object") return null;
-      const o = item as Record<string, unknown>;
-      if (typeof o.style !== "string" || typeof o.text !== "string") return null;
-      return { style: o.style, text: o.text };
-    })
-    .filter((v): v is AnalysisResult["safe_rewrites"][number] => v !== null);
+  const out: SafeRewrite[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    if (typeof o.style !== "string" || typeof o.text !== "string") continue;
+    out.push({ style: o.style, text: o.text });
+  }
+  return out;
 }
 
 function parseAnalysis(raw: string): AnalysisResult | null {
