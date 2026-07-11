@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import {
   DEMO_RESULT,
   EXAMPLE_POST,
@@ -12,6 +12,10 @@ import {
   type Visibility,
 } from "../lib/analyze";
 import { analyzeFootprint } from "../lib/analyze.functions";
+
+const ImageGuard = lazy(() => import("../components/ImageGuard"));
+
+type Tab = "text" | "image";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -36,6 +40,7 @@ export const Route = createFileRoute("/")({
 const VISIBILITIES: Visibility[] = ["public", "friends", "group", "dm"];
 
 function Home() {
+  const [tab, setTab] = useState<Tab>("text");
   const [text, setText] = useState("");
   const [visibility, setVisibility] = useState<Visibility>("public");
   const [loading, setLoading] = useState(false);
@@ -103,43 +108,86 @@ function Home() {
       </header>
 
       <main className="mx-auto max-w-3xl px-5 py-8 sm:py-12">
-        <section className="mb-8">
+        <section className="mb-6">
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
             SNS에 올리기 전,{" "}
             <span className="text-primary">디지털 발자국</span>부터 확인하세요.
           </h1>
           <p className="mt-3 text-sm sm:text-base text-muted-foreground">
-            글 속에 직접 드러난 개인정보와, 여러 단서의 조합으로 추론 가능한
-            정보를 함께 짚어드립니다.
+            게시글과 이미지 속 개인정보 후보를 게시 전에 확인하고 안전하게
+            수정할 수 있도록 도와드립니다.
           </p>
         </section>
 
-        <InputPanel
-          text={text}
-          onText={setText}
-          visibility={visibility}
-          onVisibility={setVisibility}
-          charCount={charCount}
-          overLimit={overLimit}
-          onExample={() => {
-            setText(EXAMPLE_POST);
-            setError(null);
-          }}
-          onAnalyze={handleAnalyze}
-          canAnalyze={canAnalyze}
-          loading={loading}
-          error={error}
-        />
+        <div
+          role="tablist"
+          className="mb-6 inline-flex rounded-lg border border-border bg-card p-1"
+        >
+          {(
+            [
+              { id: "text" as const, label: "게시글 개인정보 점검" },
+              { id: "image" as const, label: "이미지 개인정보 가리기" },
+            ]
+          ).map((t) => (
+            <button
+              key={t.id}
+              role="tab"
+              aria-selected={tab === t.id}
+              onClick={() => setTab(t.id)}
+              className={
+                "rounded-md px-3 py-1.5 text-sm transition " +
+                (tab === t.id
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground")
+              }
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
 
-        {loading && <LoadingCard />}
+        {tab === "text" && (
+          <>
+            <InputPanel
+              text={text}
+              onText={setText}
+              visibility={visibility}
+              onVisibility={setVisibility}
+              charCount={charCount}
+              overLimit={overLimit}
+              onExample={() => {
+                setText(EXAMPLE_POST);
+                setError(null);
+              }}
+              onAnalyze={handleAnalyze}
+              canAnalyze={canAnalyze}
+              loading={loading}
+              error={error}
+            />
 
-        {response && (
-          <ResultView response={response} onReset={handleReset} />
+            {loading && <LoadingCard />}
+
+            {response && (
+              <ResultView response={response} onReset={handleReset} />
+            )}
+          </>
+        )}
+
+        {tab === "image" && (
+          <Suspense
+            fallback={
+              <div className="rounded-2xl border border-border bg-card p-6 text-sm text-muted-foreground">
+                이미지 편집기를 불러오는 중...
+              </div>
+            }
+          >
+            <ImageGuard />
+          </Suspense>
         )}
 
         <footer className="mt-16 border-t border-border/60 pt-6 text-[11px] text-muted-foreground">
           Footprint Guard는 게시 전 참고용 보조 도구입니다. 입력한 게시글과
-          분석 결과는 서버에 저장하지 않습니다.
+          이미지는 서버에 저장하지 않습니다.
         </footer>
       </main>
     </div>
