@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { lazy, Suspense, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   DEMO_RESULT,
   EXAMPLE_POST,
@@ -12,6 +12,7 @@ import {
   type Visibility,
 } from "../lib/analyze";
 import { analyzeFootprint } from "../lib/analyze.functions";
+import type { ImageGuardHandle } from "../components/ImageGuard";
 
 const ImageGuard = lazy(() => import("../components/ImageGuard"));
 
@@ -46,12 +47,27 @@ function Home() {
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<AnalysisResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [hasImage, setHasImage] = useState(false);
+  const [pendingImageFinding, setPendingImageFinding] = useState<string | null>(null);
+  const imageGuardRef = useRef<ImageGuardHandle | null>(null);
 
   const analyze = useServerFn(analyzeFootprint);
 
   const charCount = text.length;
   const overLimit = charCount > MAX_INPUT_LENGTH;
   const canAnalyze = text.trim().length > 0 && !overLimit && !loading;
+
+  useEffect(() => {
+    if (tab !== "image" || !pendingImageFinding) return;
+    if (imageGuardRef.current?.beginManualSelection(pendingImageFinding)) {
+      setPendingImageFinding(null);
+    }
+  }, [pendingImageFinding, tab]);
+
+  function selectImageFinding(finding: string) {
+    setPendingImageFinding(finding);
+    setTab("image");
+  }
 
   async function handleAnalyze() {
     if (!text.trim()) {
@@ -66,7 +82,8 @@ function Home() {
     setLoading(true);
     setResponse(null);
     try {
-      const r = await analyze({ data: { text, visibility } });
+      const image = await imageGuardRef.current?.getImageForAnalysis();
+      const r = await analyze({ data: { text, visibility, image } });
       setResponse(r);
     } catch (e) {
       console.error(e);
@@ -168,12 +185,17 @@ function Home() {
             {loading && <LoadingCard />}
 
             {response && (
-              <ResultView response={response} onReset={handleReset} />
+              <ResultView
+                response={response}
+                hasImage={hasImage}
+                onSelectImageFinding={selectImageFinding}
+                onReset={handleReset}
+              />
             )}
           </>
         )}
 
-        {tab === "image" && (
+        <div className={tab === "image" ? "" : "hidden"}>
           <Suspense
             fallback={
               <div className="rounded-2xl border border-border bg-card p-6 text-sm text-muted-foreground">
@@ -181,9 +203,9 @@ function Home() {
               </div>
             }
           >
-            <ImageGuard />
+            <ImageGuard ref={imageGuardRef} onImageStateChange={setHasImage} />
           </Suspense>
-        )}
+        </div>
 
         <footer className="mt-16 border-t border-border/60 pt-6 text-[11px] text-muted-foreground">
           Footprint Guard는 게시 전 참고용 보조 도구입니다. 입력한 게시글과
@@ -317,9 +339,13 @@ function SourceBadge({ source }: { source: AnalysisSource }) {
 
 function ResultView({
   response,
+  hasImage,
+  onSelectImageFinding,
   onReset,
 }: {
   response: AnalysisResponse;
+  hasImage: boolean;
+  onSelectImageFinding: (finding: string) => void;
   onReset: () => void;
 }) {
   const { result, source, notice } = response;
@@ -374,6 +400,34 @@ function ResultView({
           </div>
         )}
       </Card>
+
+      {result.image_findings.length > 0 && (
+        <Card title="AI 사진 분석">
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            AI는 노출 가능성을 설명합니다. 정확한 가림 위치는 직접 선택해 주세요.
+          </p>
+          <div className="mt-3 space-y-3">
+            {result.image_findings.map((finding, index) => (
+              <div key={`${finding}-${index}`} className="rounded-xl border border-border p-4">
+                <p className="text-sm leading-relaxed">{finding}</p>
+                {hasImage ? (
+                  <button
+                    type="button"
+                    onClick={() => onSelectImageFinding(finding)}
+                    className="mt-3 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10"
+                  >
+                    사진에서 가릴 위치 선택
+                  </button>
+                ) : (
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    사진을 업로드하면 가릴 위치를 직접 선택할 수 있습니다.
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {/* 4. Inferred */}
       <Card title="조합으로 추론 가능한 정보">

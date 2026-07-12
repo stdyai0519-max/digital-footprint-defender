@@ -36,6 +36,7 @@ export interface AnalysisResult {
   inferred_exposures: InferredExposure[];
   priority_actions: string[];
   safe_rewrites: SafeRewrite[];
+  image_findings: string[];
   uncertainty: string;
 }
 
@@ -112,6 +113,7 @@ export const DEMO_RESULT: AnalysisResult = {
       text: "오늘 행사 끝나고 같이 갈 사람 있으면 개인 메시지 줘!",
     },
   ],
+  image_findings: [],
   uncertainty:
     "실제 위험은 계정 공개 범위, 게시 대상과 주변 상황에 따라 달라질 수 있습니다. 이 서비스는 개인정보 노출 위험을 확정하는 도구가 아니라 게시 전 확인을 돕는 교육용 보조 도구입니다.",
 };

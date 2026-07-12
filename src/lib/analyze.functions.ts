@@ -13,9 +13,15 @@ import {
   type Visibility,
 } from "./analyze";
 
+const ImageInputSchema = z.object({
+  dataUrl: z.string().startsWith("data:image/").max(14_000_000),
+  mediaType: z.enum(["image/jpeg", "image/png", "image/webp"]),
+});
+
 const InputSchema = z.object({
   text: z.string().min(1).max(MAX_INPUT_LENGTH),
   visibility: z.enum(["public", "friends", "group", "dm"]),
+  image: ImageInputSchema.nullable().optional(),
 });
 
 const ALLOWED_STATUS = new Set([
@@ -34,6 +40,8 @@ const SYSTEM_PROMPT = `당신은 청소년 SNS 게시글의 개인정보·디지
 - 위험 점수나 백분율은 절대 사용하지 마세요.
 - 원본의 말투와 의미를 최대한 유지하면서 민감 정보만 제거한 안전 수정문을 제시하세요.
 - 게시 범위(전체 공개/친구/단체 채팅/개인 메시지)에 따라 위험 해석이 달라진다는 점을 반영하세요.
+- 사진이 제공된 경우에만 사진에서 확인 가능한 개인정보 노출 가능성을 image_findings에 짧은 문장으로 작성하세요. 위치 좌표를 만들거나 추정하지 마세요.
+- 사진이 없거나 확신할 수 없는 경우 image_findings는 빈 배열로 두세요.
 - 모든 문자열은 한국어로 작성하세요.
 
 응답은 오직 아래 JSON 스키마만 출력합니다. 마크다운, 코드블록, 설명 문장 금지.
@@ -43,6 +51,7 @@ const SYSTEM_PROMPT = `당신은 청소년 SNS 게시글의 개인정보·디지
   "direct_exposures": [{ "text": string, "category": string, "reason": string, "certainty": "명확함" | "문맥상 가능" | "확인 필요" }],
   "inferred_exposures": [{ "inference": string, "used_clues": string[], "reason": string }],
   "priority_actions": string[],
+  "image_findings": string[],
   "safe_rewrites": [
     { "style": "최소 수정", "text": string },
     { "style": "안전 우선", "text": string }
@@ -50,10 +59,12 @@ const SYSTEM_PROMPT = `당신은 청소년 SNS 게시글의 개인정보·디지
   "uncertainty": string
 }`;
 
-function buildUserPrompt(text: string, visibility: Visibility) {
+function buildUserPrompt(text: string, visibility: Visibility, hasImage: boolean) {
   return `[게시 범위] ${VISIBILITY_LABELS[visibility]}
 [게시글]
 ${text}
+
+[사진 첨부] ${hasImage ? "있음" : "없음"}
 
 위 게시글을 분석해 지정된 JSON 스키마만 출력하세요.`;
 }
@@ -140,6 +151,7 @@ function parseAnalysis(raw: string): AnalysisResult | null {
     direct_exposures: coerceDirectExposures(o.direct_exposures),
     inferred_exposures: coerceInferred(o.inferred_exposures),
     priority_actions: coerceStringArray(o.priority_actions),
+    image_findings: coerceStringArray(o.image_findings),
     safe_rewrites: coerceRewrites(o.safe_rewrites),
     uncertainty: typeof o.uncertainty === "string" ? o.uncertainty : "",
   };
@@ -149,6 +161,7 @@ async function callGateway(
   apiKey: string,
   text: string,
   visibility: Visibility,
+  image?: z.infer<typeof ImageInputSchema> | null,
 ): Promise<string> {
   const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
@@ -160,7 +173,15 @@ async function callGateway(
       model: "google/gemini-3-flash-preview",
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: buildUserPrompt(text, visibility) },
+        {
+          role: "user",
+          content: image
+            ? [
+                { type: "text", text: buildUserPrompt(text, visibility, true) },
+                { type: "image_url", image_url: { url: image.dataUrl } },
+              ]
+            : buildUserPrompt(text, visibility, false),
+        },
       ],
       response_format: { type: "json_object" },
     }),
@@ -178,7 +199,7 @@ async function callGateway(
 }
 
 export const analyzeFootprint = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) => InputSchema.parse(input))
+  .validator((input: unknown) => InputSchema.parse(input))
   .handler(async ({ data }): Promise<AnalysisResponse> => {
     const apiKey = process.env.LOVABLE_API_KEY;
     if (!apiKey) {
@@ -191,7 +212,7 @@ export const analyzeFootprint = createServerFn({ method: "POST" })
 
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const raw = await callGateway(apiKey, data.text, data.visibility);
+        const raw = await callGateway(apiKey, data.text, data.visibility, data.image);
         const parsed = parseAnalysis(raw);
         if (parsed) return { source: "ai", result: parsed };
       } catch (err) {
