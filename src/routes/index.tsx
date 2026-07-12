@@ -11,7 +11,10 @@ import {
   type Visibility,
 } from "../lib/analyze";
 import { analyzeFootprint } from "../lib/analyze.functions";
-import type { ImageGuardSnapshot } from "../components/ImageGuard";
+import type {
+  ImageGuardHandle,
+  ImageGuardSnapshot,
+} from "../components/ImageGuard";
 import {
   AUDIENCE_GUIDANCE,
   derivePostSignals,
@@ -68,6 +71,7 @@ function Home() {
     categoryCounts: {},
   });
   const composerRef = useRef<HTMLDivElement | null>(null);
+  const imageGuardRef = useRef<ImageGuardHandle | null>(null);
   const imageGetterRef = useRef<(() => Promise<string | null>) | null>(null);
 
   const analyze = useServerFn(analyzeFootprint);
@@ -87,6 +91,12 @@ function Home() {
   const handleImageSnapshot = useCallback((snapshot: ImageGuardSnapshot) => {
     setImageSnapshot(snapshot);
   }, []);
+
+  function selectImageFinding(finding: string) {
+    if (!imageGuardRef.current?.beginManualSelection(finding)) {
+      setError("사진을 먼저 첨부한 뒤 가릴 위치를 선택해 주세요.");
+    }
+  }
 
   async function handleAnalyze() {
     if (!text.trim() && !imageSnapshot.hasImage) {
@@ -215,6 +225,7 @@ function Home() {
             }
           >
             <ImageGuard
+              ref={imageGuardRef}
               embedded
               scanSignal={scanSignal}
               onSnapshotChange={handleImageSnapshot}
@@ -242,6 +253,8 @@ function Home() {
         {response && (
           <ResultView
             response={response}
+            hasImage={imageSnapshot.hasImage}
+            onSelectImageFinding={selectImageFinding}
             onReset={handleReset}
             onApplyText={(nextText) => {
               setText(nextText);
@@ -701,10 +714,14 @@ function SourceBadge({ source }: { source: AnalysisSource }) {
 
 function ResultView({
   response,
+  hasImage,
+  onSelectImageFinding,
   onReset,
   onApplyText,
 }: {
   response: AnalysisResponse;
+  hasImage: boolean;
+  onSelectImageFinding: (finding: string) => void;
   onReset: () => void;
   onApplyText: (text: string) => void;
 }) {
@@ -728,11 +745,25 @@ function ResultView({
       {/* Image findings */}
       {result.image_findings && result.image_findings.length > 0 && (
         <Card title="AI 사진 분석">
+          <p className="mb-3 text-sm leading-relaxed text-muted-foreground">
+            AI는 노출 가능성을 설명합니다. 정확한 가림 위치는 직접 선택해 주세요.
+          </p>
           <ul className="space-y-2">
             {result.image_findings.map((f, i) => (
-              <li key={i} className="flex gap-2 text-sm leading-relaxed">
+              <li key={i} className="rounded-xl border border-border p-3 text-sm leading-relaxed">
                 <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
-                <span>{f}</span>
+                <div className="min-w-0 flex-1">
+                  <span>{f}</span>
+                  {hasImage && (
+                    <button
+                      type="button"
+                      onClick={() => onSelectImageFinding(f)}
+                      className="mt-2 block rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10"
+                    >
+                      사진에서 가릴 위치 선택
+                    </button>
+                  )}
+                </div>
               </li>
             ))}
           </ul>

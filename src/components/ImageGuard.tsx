@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { createAiFindingManualCandidate } from "../lib/image-finding-selection";
 
 /* ---------------- Types ---------------- */
 
@@ -21,6 +30,15 @@ interface Candidate {
   box: Box;
   selected: boolean;
   source: Source;
+}
+
+interface ManualSelection {
+  finding: string;
+}
+
+export interface ImageGuardHandle {
+  beginManualSelection: (finding: string) => boolean;
+  cancelManualSelection: () => void;
 }
 
 export interface ImageGuardSnapshot {
@@ -191,12 +209,12 @@ async function detectNativeVisuals(
 
 /* ---------------- Component ---------------- */
 
-export default function ImageGuard({
+const ImageGuard = forwardRef<ImageGuardHandle, ImageGuardProps>(function ImageGuard({
   embedded = false,
   scanSignal = 0,
   onSnapshotChange,
   imageGetterRef,
-}: ImageGuardProps) {
+}, ref) {
   const [imgUrl, setImgUrl] = useState<string | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [imgSize, setImgSize] = useState<{ w: number; h: number } | null>(null);
@@ -211,6 +229,7 @@ export default function ImageGuard({
   const [manualCategory, setManualCategory] = useState("사용자 지정");
   const [strength, setStrength] = useState(12);
   const [showModified, setShowModified] = useState(false);
+  const [manualSelection, setManualSelection] = useState<ManualSelection | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -226,6 +245,25 @@ export default function ImageGuard({
   } | null>(null);
   const [, forceTick] = useState(0);
   const lastScanSignal = useRef(scanSignal);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      beginManualSelection(finding) {
+        if (!imgRef.current || !imgSize) return false;
+        setShowModified(false);
+        setManualSelection({ finding });
+        requestAnimationFrame(() => {
+          containerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+        });
+        return true;
+      },
+      cancelManualSelection() {
+        setManualSelection(null);
+      },
+    }),
+    [imgSize],
+  );
 
   /* -------- upload -------- */
 
@@ -516,6 +554,12 @@ export default function ImageGuard({
   function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     if (showModified) return;
     const { x, y } = toCanvasXY(e);
+    if (manualSelection) {
+      canvasRef.current!.setPointerCapture(e.pointerId);
+      dragRef.current = { startX: x, startY: y, curX: x, curY: y, active: true };
+      forceTick((n) => n + 1);
+      return;
+    }
     // click hit test — toggle selection
     const imgX = x / scale;
     const imgY = y / scale;
@@ -558,21 +602,32 @@ export default function ImageGuard({
       const nh = rh / scale;
       setCandidates((cs) => [
         ...cs,
-        {
-          id: `manual-${Date.now()}`,
-          text: "",
-          category: manualCategory,
-          reason: `${manualCategory} 후보로 사용자가 직접 선택한 영역입니다.`,
-          confidence: null,
-          box: {
-            x: Math.max(0, rx),
-            y: Math.max(0, ry),
-            width: Math.min(imgSize.w - rx, nw),
-            height: Math.min(imgSize.h - ry, nh),
-          },
-          selected: true,
-          source: "manual",
-        },
+        manualSelection
+          ? createAiFindingManualCandidate({
+              id: `manual-${Date.now()}`,
+              finding: manualSelection.finding,
+              box: {
+                x: Math.max(0, rx),
+                y: Math.max(0, ry),
+                width: Math.min(imgSize.w - rx, nw),
+                height: Math.min(imgSize.h - ry, nh),
+              },
+            })
+          : {
+              id: `manual-${Date.now()}`,
+              text: "",
+              category: manualCategory,
+              reason: `${manualCategory} 후보로 사용자가 직접 선택한 영역입니다.`,
+              confidence: null,
+              box: {
+                x: Math.max(0, rx),
+                y: Math.max(0, ry),
+                width: Math.min(imgSize.w - rx, nw),
+                height: Math.min(imgSize.h - ry, nh),
+              },
+              selected: true,
+              source: "manual" as const,
+            },
       ]);
     }
     dragRef.current = null;
@@ -748,6 +803,22 @@ export default function ImageGuard({
 
       {imgUrl && imgSize && (
         <>
+          {manualSelection && (
+            <section className="rounded-xl border border-primary/40 bg-primary/5 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <p className="text-sm leading-relaxed">
+                  “{manualSelection.finding}”에 해당하는 부분을 사진에서 드래그하세요.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setManualSelection(null)}
+                  className="rounded-lg border border-border bg-card px-3 py-2 text-sm hover:bg-muted"
+                >
+                  선택 취소
+                </button>
+              </div>
+            </section>
+          )}
           <section className="rounded-2xl border border-border bg-card p-4">
             <div className="flex flex-wrap items-center gap-2">
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -869,6 +940,7 @@ export default function ImageGuard({
                   setImgSize(null);
                   setCandidates([]);
                   setHistory([]);
+                  setManualSelection(null);
                   setStatus("idle");
                   setErrMsg(null);
                 }}
@@ -970,7 +1042,11 @@ export default function ImageGuard({
       )}
     </div>
   );
-}
+});
+
+ImageGuard.displayName = "ImageGuard";
+
+export default ImageGuard;
 
 /* ---------------- helpers ---------------- */
 
