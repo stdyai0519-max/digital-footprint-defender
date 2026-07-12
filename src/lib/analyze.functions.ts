@@ -3,14 +3,12 @@ import { z } from "zod";
 import {
   DEMO_RESULT,
   MAX_INPUT_LENGTH,
-  VISIBILITY_LABELS,
   type AnalysisResponse,
   type AnalysisResult,
   type Certainty,
   type DirectExposure,
   type InferredExposure,
   type SafeRewrite,
-  type Visibility,
 } from "./analyze";
 
 const InputSchema = z
@@ -47,7 +45,7 @@ const SYSTEM_PROMPT = `당신은 청소년 SNS 게시글의 개인정보·디지
 - 관련 없는 개인정보 보호 일반론을 길게 늘어놓지 마세요. 게시글·사진에 밀착한 조언만 하세요.
 - 위험 점수나 백분율은 절대 사용하지 마세요.
 - 원본의 말투와 의미를 최대한 유지하면서 민감 정보만 제거한 안전 수정문을 제시하세요.
-- 게시 범위(전체 공개/친구/단체 채팅/개인 메시지)에 따라 위험 해석이 달라진다는 점을 반영하세요.
+- 모든 분석은 SNS 공개 게시물을 기준으로 해석하세요.
 - 모든 문자열은 한국어로 작성하세요.
 
 이미지가 제공되면 다음 항목의 노출 가능성을 확인하세요:
@@ -75,10 +73,10 @@ image_findings에는 사진에서 발견한 개인정보 노출 가능성을 항
 게시글이 비어 있고 이미지만 있는 경우에도 사진만 근거로 status, summary, direct_exposures(사진 속 텍스트),
 image_findings 등을 채워 응답하세요. safe_rewrites는 없으면 빈 배열로 두어도 됩니다.`;
 
-function buildUserText(text: string, visibility: Visibility, hasImage: boolean) {
+function buildUserText(text: string, hasImage: boolean) {
   const body = text.trim() ? text : "(게시글 없음 — 사진만 제공됨)";
   const extra = hasImage ? "\n[첨부 이미지가 함께 제공됩니다. 이미지 속 시각적 단서도 함께 분석하세요.]" : "";
-  return `[게시 범위] ${VISIBILITY_LABELS[visibility]}
+  return `[분석 기준] SNS 공개 게시물
 [게시글]
 ${body}${extra}
 
@@ -174,14 +172,13 @@ function parseAnalysis(raw: string): AnalysisResult | null {
 async function callGateway(
   apiKey: string,
   text: string,
-  visibility: Visibility,
   image: string | undefined,
 ): Promise<string> {
   const model = process.env.LOVABLE_MODEL?.trim() || DEFAULT_MODEL;
   const userContent: Array<
     | { type: "text"; text: string }
     | { type: "image_url"; image_url: { url: string } }
-  > = [{ type: "text", text: buildUserText(text, visibility, !!image) }];
+  > = [{ type: "text", text: buildUserText(text, !!image) }];
   if (image) userContent.push({ type: "image_url", image_url: { url: image } });
 
   const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -223,7 +220,7 @@ export const analyzeFootprint = createServerFn({ method: "POST" })
 
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const raw = await callGateway(apiKey, data.text, data.visibility, data.image);
+        const raw = await callGateway(apiKey, data.text, data.image);
         const parsed = parseAnalysis(raw);
         if (parsed) return { source: "ai", result: parsed };
       } catch (err) {
