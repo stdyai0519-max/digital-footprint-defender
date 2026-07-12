@@ -37,6 +37,7 @@ export interface AnalysisResult {
   priority_actions: string[];
   safe_rewrites: SafeRewrite[];
   uncertainty: string;
+  image_findings?: string[];
 }
 
 export type AnalysisSource = "ai" | "demo";
