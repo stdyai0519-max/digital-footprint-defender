@@ -37,6 +37,9 @@ interface ImageGuardProps {
   embedded?: boolean;
   scanSignal?: number;
   onSnapshotChange?: (snapshot: ImageGuardSnapshot) => void;
+  imageGetterRef?: React.MutableRefObject<
+    (() => Promise<string | null>) | null
+  >;
 }
 
 type Status =
