@@ -8,6 +8,11 @@ import {
   useState,
 } from "react";
 import { createAiFindingManualCandidate } from "../lib/image-finding-selection";
+import {
+  createImageAnalysisPlan,
+  getSelectedCandidates,
+  type ImageAnalysisMode,
+} from "../lib/image-analysis-mode";
 
 /* ---------------- Types ---------------- */
 
@@ -41,6 +46,10 @@ export interface ImageGuardHandle {
   cancelManualSelection: () => void;
 }
 
+export type ImageAnalysisGetter = (
+  options?: { mode?: ImageAnalysisMode },
+) => Promise<string | null>;
+
 export interface ImageGuardSnapshot {
   hasImage: boolean;
   previewUrl: string | null;
@@ -55,9 +64,7 @@ interface ImageGuardProps {
   embedded?: boolean;
   scanSignal?: number;
   onSnapshotChange?: (snapshot: ImageGuardSnapshot) => void;
-  imageGetterRef?: React.MutableRefObject<
-    (() => Promise<string | null>) | null
-  >;
+  imageGetterRef?: React.MutableRefObject<ImageAnalysisGetter | null>;
 }
 
 type Status =
@@ -717,7 +724,7 @@ const ImageGuard = forwardRef<ImageGuardHandle, ImageGuardProps>(function ImageG
 
   useEffect(() => {
     if (!imageGetterRef) return;
-    imageGetterRef.current = async () => {
+    imageGetterRef.current = async ({ mode = "original" } = {}) => {
       const img = imgRef.current;
       if (!img || !imgSize) return null;
       const MAX = 1280;
@@ -729,13 +736,31 @@ const ImageGuard = forwardRef<ImageGuardHandle, ImageGuardProps>(function ImageG
       c.height = h;
       const ctx = c.getContext("2d");
       if (!ctx) return null;
-      ctx.drawImage(img, 0, 0, w, h);
+      const plan = createImageAnalysisPlan({
+        mode,
+        selectedCount,
+        effect,
+        strength,
+      });
+      if (plan.useProcessedImage) {
+        renderProcessed(
+          ctx,
+          img,
+          imgSize,
+          candidates,
+          plan.effect,
+          plan.strength,
+          r,
+        );
+      } else {
+        ctx.drawImage(img, 0, 0, w, h);
+      }
       return c.toDataURL("image/jpeg", 0.82);
     };
     return () => {
       if (imageGetterRef.current) imageGetterRef.current = null;
     };
-  }, [imageGetterRef, imgSize]);
+  }, [candidates, effect, imageGetterRef, imgSize, selectedCount, strength]);
 
 
 
@@ -1085,7 +1110,7 @@ function renderProcessed(
   ctx.clearRect(0, 0, W, H);
   ctx.drawImage(img, 0, 0, W, H);
 
-  const active = candidates.filter((c) => c.selected);
+  const active = getSelectedCandidates(candidates);
   for (const c of active) {
     const x = c.box.x * displayScale;
     const y = c.box.y * displayScale;

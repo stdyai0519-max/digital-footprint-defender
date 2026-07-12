@@ -11,10 +11,15 @@ import {
 } from "../lib/analyze";
 import { analyzeFootprint } from "../lib/analyze.functions";
 import type {
+  ImageAnalysisGetter,
   ImageGuardHandle,
   ImageGuardSnapshot,
 } from "../components/ImageGuard";
 import { derivePostSignals, type ConsentChoice } from "../lib/post-analysis";
+import {
+  shouldRefreshLocalDetections,
+  type ImageAnalysisMode,
+} from "../lib/image-analysis-mode";
 
 const ImageGuard = lazy(() => import("../components/ImageGuard"));
 
@@ -51,6 +56,7 @@ function Home() {
   const [consentChoice, setConsentChoice] =
     useState<ConsentChoice | null>(null);
   const [scanSignal, setScanSignal] = useState(0);
+  const [processedRecheck, setProcessedRecheck] = useState(false);
   const [imageSnapshot, setImageSnapshot] = useState<ImageGuardSnapshot>({
     hasImage: false,
     previewUrl: null,
@@ -62,7 +68,7 @@ function Home() {
   });
   const composerRef = useRef<HTMLDivElement | null>(null);
   const imageGuardRef = useRef<ImageGuardHandle | null>(null);
-  const imageGetterRef = useRef<(() => Promise<string | null>) | null>(null);
+  const imageGetterRef = useRef<ImageAnalysisGetter | null>(null);
 
   const analyze = useServerFn(analyzeFootprint);
 
@@ -88,7 +94,7 @@ function Home() {
     }
   }
 
-  async function handleAnalyze() {
+  async function handleAnalyze({ mode }: { mode: ImageAnalysisMode }) {
     if (!text.trim() && !imageSnapshot.hasImage) {
       setError("게시글을 입력하거나 사진을 첨부해 주세요.");
       return;
@@ -102,17 +108,24 @@ function Home() {
     if (!analysisStarted) setInitialText(text);
     setAnalysisStarted(true);
     setSubmittedText(text);
-    if (imageSnapshot.hasImage) setScanSignal((value) => value + 1);
 
     const hasImage = imageSnapshot.hasImage;
     if (!text.trim() && !hasImage) return;
+    const useProcessedImage =
+      mode === "processed" && hasImage && imageSnapshot.selectedCount > 0;
+    setProcessedRecheck(useProcessedImage);
+    if (hasImage && shouldRefreshLocalDetections(mode)) {
+      setScanSignal((value) => value + 1);
+    }
 
     setLoading(true);
     try {
       let imageDataUrl: string | null = null;
       if (hasImage && imageGetterRef.current) {
         try {
-          imageDataUrl = await imageGetterRef.current();
+          imageDataUrl = await imageGetterRef.current({
+            mode: useProcessedImage ? "processed" : "original",
+          });
         } catch (err) {
           console.error(
             "Image encode failed",
@@ -146,6 +159,10 @@ function Home() {
     }
   }
 
+  function handleRecheck() {
+    void handleAnalyze({ mode: "processed" });
+  }
+
   function handleReset() {
     setResponse(null);
     setText("");
@@ -154,6 +171,7 @@ function Home() {
     setInitialText("");
     setInitialResponse(null);
     setConsentChoice(null);
+    setProcessedRecheck(false);
   }
 
   return (
@@ -199,7 +217,7 @@ function Home() {
             setText(EXAMPLE_POST);
             setError(null);
           }}
-          onAnalyze={handleAnalyze}
+          onAnalyze={() => void handleAnalyze({ mode: "original" })}
           canAnalyze={canAnalyze}
           loading={combinedLoading}
           error={error}
@@ -230,6 +248,7 @@ function Home() {
             text={submittedText}
             image={imageSnapshot}
             response={response}
+            processedRecheck={processedRecheck}
             onEdit={() =>
               composerRef.current?.scrollIntoView({ behavior: "smooth" })
             }
@@ -255,11 +274,12 @@ function Home() {
             currentText={text}
             image={imageSnapshot}
             response={response}
+            processedRecheck={processedRecheck}
             initialText={initialText}
             initialResponse={initialResponse}
             consentChoice={consentChoice}
             onConsent={setConsentChoice}
-            onRecheck={handleAnalyze}
+            onRecheck={handleRecheck}
           />
         )}
 
@@ -353,6 +373,7 @@ function UnifiedResultHeader(props: {
   text: string;
   image: ImageGuardSnapshot;
   response: AnalysisResponse | null;
+  processedRecheck: boolean;
   onEdit: () => void;
 }) {
   const directCount = props.response?.result.direct_exposures.length ?? 0;
@@ -363,6 +384,11 @@ function UnifiedResultHeader(props: {
 
   return (
     <section className="mt-8 space-y-4">
+      {props.processedRecheck && (
+        <div className="rounded-xl border border-primary/40 bg-primary/5 p-4 text-sm font-medium text-primary">
+          가림 처리가 적용된 이미지로 다시 점검한 결과입니다.
+        </div>
+      )}
       <div className="rounded-2xl border border-border bg-card p-5 sm:p-6">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-muted-foreground">
@@ -397,7 +423,9 @@ function UnifiedResultHeader(props: {
           )}
           {props.image.hasImage && (
             <span className="rounded-full bg-card px-3 py-1">
-              이미지 후보 {props.image.candidateCount}개
+              {props.processedRecheck
+                ? `가림 적용 영역 ${props.image.selectedCount}개`
+                : `이미지 후보 ${props.image.candidateCount}개`}
             </span>
           )}
         </div>
@@ -423,18 +451,23 @@ function PostActionCards(props: {
   currentText: string;
   image: ImageGuardSnapshot;
   response: AnalysisResponse | null;
+  processedRecheck: boolean;
   initialText: string;
   initialResponse: AnalysisResponse | null;
   consentChoice: ConsentChoice | null;
   onConsent: (choice: ConsentChoice) => void;
   onRecheck: () => void;
 }) {
+  const imageCategories = props.processedRecheck ? [] : props.image.categories;
+  const imageCategoryCounts = props.processedRecheck
+    ? {}
+    : props.image.categoryCounts;
   const { mentions, thirdPartyDetected, hasCrossMediaConnection } =
     derivePostSignals({
       text: props.submittedText,
       hasImage: props.image.hasImage,
-      categories: props.image.categories,
-      categoryCounts: props.image.categoryCounts,
+      categories: imageCategories,
+      categoryCounts: imageCategoryCounts,
     });
   const textConnections = props.response?.result.inferred_exposures ?? [];
   const textChanged = props.initialText !== props.currentText;
@@ -443,8 +476,17 @@ function PostActionCards(props: {
 
   return (
     <section className="mt-5 space-y-5">
+      {props.processedRecheck && props.image.hasImage && (
+        <Card title="이미지 가림 처리 상태">
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            원본에서 찾은 후보는 편집기에 유지됩니다. 현재 선택된 {props.image.selectedCount}개
+            영역은 가림 처리된 상태로 AI에 다시 전달됐으며, 최신 AI 결과의 사진 분석 항목은
+            가림 후에도 남아 있을 수 있는 노출 가능성을 뜻합니다.
+          </p>
+        </Card>
+      )}
       {(props.response?.result.direct_exposures.length ||
-        props.image.candidateCount > 0 ||
+        (!props.processedRecheck && props.image.candidateCount > 0) ||
         mentions.length > 0) && (
         <Card title="발견된 개인정보">
           <div className="space-y-4">
@@ -490,7 +532,7 @@ function PostActionCards(props: {
                       </p>
                     </div>
                   ))}
-                  {props.image.categories
+                  {imageCategories
                     .filter((category) =>
                       ["얼굴", "명찰·신분증", "연락처"].includes(category),
                     )
@@ -524,7 +566,7 @@ function PostActionCards(props: {
                       {mention} · 텍스트
                     </span>
                   ))}
-                  {props.image.categories.map((category) => (
+                  {imageCategories.map((category) => (
                     <span key={category} className="rounded-md bg-muted px-2 py-1">
                       {category} · 이미지
                     </span>
