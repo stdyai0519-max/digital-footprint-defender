@@ -59,6 +59,7 @@ export const VISIBILITY_LABELS: Record<Visibility, string> = {
 };
 
 export const MAX_INPUT_LENGTH = 1500;
+export const PUBLIC_POST_VISIBILITY = "public" as const;
 
 export const DEMO_RESULT: AnalysisResult = {
   status: "공개 게시 전 수정 필요",

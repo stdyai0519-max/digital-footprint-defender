@@ -5,21 +5,16 @@ import {
   DEMO_RESULT,
   EXAMPLE_POST,
   MAX_INPUT_LENGTH,
-  VISIBILITY_LABELS,
+  PUBLIC_POST_VISIBILITY,
   type AnalysisResponse,
   type AnalysisSource,
-  type Visibility,
 } from "../lib/analyze";
 import { analyzeFootprint } from "../lib/analyze.functions";
 import type {
   ImageGuardHandle,
   ImageGuardSnapshot,
 } from "../components/ImageGuard";
-import {
-  AUDIENCE_GUIDANCE,
-  derivePostSignals,
-  type ConsentChoice,
-} from "../lib/post-analysis";
+import { derivePostSignals, type ConsentChoice } from "../lib/post-analysis";
 
 const ImageGuard = lazy(() => import("../components/ImageGuard"));
 
@@ -43,18 +38,13 @@ export const Route = createFileRoute("/")({
   component: Home,
 });
 
-const VISIBILITIES: Visibility[] = ["public", "friends", "group", "dm"];
-
 function Home() {
   const [text, setText] = useState("");
-  const [visibility, setVisibility] = useState<Visibility>("public");
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<AnalysisResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [analysisStarted, setAnalysisStarted] = useState(false);
   const [submittedText, setSubmittedText] = useState("");
-  const [submittedVisibility, setSubmittedVisibility] =
-    useState<Visibility>("public");
   const [initialText, setInitialText] = useState("");
   const [initialResponse, setInitialResponse] =
     useState<AnalysisResponse | null>(null);
@@ -112,7 +102,6 @@ function Home() {
     if (!analysisStarted) setInitialText(text);
     setAnalysisStarted(true);
     setSubmittedText(text);
-    setSubmittedVisibility(visibility);
     if (imageSnapshot.hasImage) setScanSignal((value) => value + 1);
 
     const hasImage = imageSnapshot.hasImage;
@@ -133,9 +122,9 @@ function Home() {
       }
       const payload: {
         text: string;
-        visibility: Visibility;
+        visibility: "public";
         image?: string;
-      } = { text, visibility };
+      } = { text, visibility: PUBLIC_POST_VISIBILITY };
       if (imageDataUrl) payload.image = imageDataUrl;
       const r = await analyze({ data: payload });
       setResponse(r);
@@ -191,11 +180,11 @@ function Home() {
       <main className="mx-auto max-w-3xl px-5 py-8 sm:py-12">
         <section className="mb-6">
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
-            SNS에 올리기 전,{" "}
+            SNS에 공개 게시하기 전,{" "}
             <span className="text-primary">디지털 발자국</span>부터 확인하세요.
           </h1>
           <p className="mt-3 text-sm sm:text-base text-muted-foreground">
-            게시글과 이미지 속 개인정보 후보를 게시 전에 확인하고 안전하게
+            공개 게시물에 포함될 수 있는 개인정보 노출 가능성을 점검하고 안전하게
             수정할 수 있도록 도와드립니다.
           </p>
         </section>
@@ -204,8 +193,6 @@ function Home() {
         <InputPanel
           text={text}
           onText={setText}
-          visibility={visibility}
-          onVisibility={setVisibility}
           charCount={charCount}
           overLimit={overLimit}
           onExample={() => {
@@ -241,7 +228,6 @@ function Home() {
         {analysisStarted && !combinedLoading && (
           <UnifiedResultHeader
             text={submittedText}
-            visibility={submittedVisibility}
             image={imageSnapshot}
             response={response}
             onEdit={() =>
@@ -267,7 +253,6 @@ function Home() {
           <PostActionCards
             submittedText={submittedText}
             currentText={text}
-            visibility={visibility}
             image={imageSnapshot}
             response={response}
             initialText={initialText}
@@ -292,8 +277,6 @@ function Home() {
 function InputPanel(props: {
   text: string;
   onText: (v: string) => void;
-  visibility: Visibility;
-  onVisibility: (v: Visibility) => void;
   charCount: number;
   overLimit: boolean;
   onExample: () => void;
@@ -306,7 +289,7 @@ function InputPanel(props: {
   return (
     <section className="rounded-2xl border border-border bg-card p-5 sm:p-6">
       <label className="block text-sm font-medium mb-2">
-        SNS 게시글 입력
+        SNS 공개 게시글 입력
       </label>
       <textarea
         value={props.text}
@@ -332,30 +315,6 @@ function InputPanel(props: {
       </div>
 
       <div className="mt-5">{props.imageEditor}</div>
-
-      <div className="mt-5">
-        <div className="text-sm font-medium mb-2">게시 범위</div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          {VISIBILITIES.map((v) => {
-            const active = props.visibility === v;
-            return (
-              <button
-                key={v}
-                type="button"
-                onClick={() => props.onVisibility(v)}
-                className={
-                  "rounded-lg border px-3 py-2 text-sm transition " +
-                  (active
-                    ? "border-primary bg-primary/10 text-primary"
-                    : "border-border bg-muted/40 text-foreground hover:bg-muted")
-                }
-              >
-                {VISIBILITY_LABELS[v]}
-              </button>
-            );
-          })}
-        </div>
-      </div>
 
       {props.error && (
         <div className="mt-4 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
@@ -392,7 +351,6 @@ function LoadingCard() {
 
 function UnifiedResultHeader(props: {
   text: string;
-  visibility: Visibility;
   image: ImageGuardSnapshot;
   response: AnalysisResponse | null;
   onEdit: () => void;
@@ -424,9 +382,7 @@ function UnifiedResultHeader(props: {
             className="mt-3 max-h-64 w-full rounded-xl border border-border object-contain"
           />
         )}
-        <div className="mt-3 text-xs text-muted-foreground">
-          공개 범위: {VISIBILITY_LABELS[props.visibility]}
-        </div>
+        <div className="mt-3 text-xs text-muted-foreground">분석 기준: SNS 공개 게시물</div>
       </div>
 
       <div className="rounded-2xl border border-primary/40 bg-primary/10 p-5 sm:p-6">
@@ -465,7 +421,6 @@ function UnifiedResultHeader(props: {
 function PostActionCards(props: {
   submittedText: string;
   currentText: string;
-  visibility: Visibility;
   image: ImageGuardSnapshot;
   response: AnalysisResponse | null;
   initialText: string;
@@ -511,7 +466,7 @@ function PostActionCards(props: {
                         확신 수준: {exposure.certainty ?? "확인 필요"}
                       </p>
                       <p className="mt-1 text-[11px] text-primary">
-                        권장 행동: 구체적인 표현을 줄이거나 공개 범위를 재검토하세요.
+                        권장 행동: 구체적인 표현을 줄이거나 게시 전 내용을 다시 확인하세요.
                       </p>
                     </div>
                   ))}
@@ -579,7 +534,7 @@ function PostActionCards(props: {
                   계정 태그와 이미지 속 인물·소속 후보를 서로 연결하는 단서가 될 가능성이 있습니다.
                 </p>
                 <p className="mt-2 text-xs text-muted-foreground">
-                  태그를 확인하고 얼굴·명찰·학교 표시를 가리거나 공개 범위를 재검토하세요.
+                  태그를 확인하고 얼굴·명찰·학교 표시를 가린 뒤 게시 전 내용을 다시 확인하세요.
                 </p>
               </div>
             )}
@@ -627,7 +582,7 @@ function PostActionCards(props: {
           </div>
           {props.consentChoice === "pending" && (
             <p className="mt-3 text-xs text-warn">
-              친구 태그 삭제, 얼굴·프로필 정보 가리기, 공개 범위 축소 또는 당사자 확인을 권장합니다.
+              친구 태그 삭제, 얼굴·프로필 정보 가리기 또는 당사자 확인을 권장합니다.
             </p>
           )}
           <p className="mt-3 text-[11px] text-muted-foreground">
@@ -635,23 +590,6 @@ function PostActionCards(props: {
           </p>
         </Card>
       )}
-
-      <Card title="공개 범위 비교">
-        <div className="grid gap-2 sm:grid-cols-2">
-          {AUDIENCE_GUIDANCE.map(({ scope, explanation }) => (
-            <div
-              key={scope}
-              className={
-                "rounded-xl border p-3 " +
-                (props.visibility === scope ? "border-primary bg-primary/5" : "border-border")
-              }
-            >
-              <div className="text-sm font-semibold">{VISIBILITY_LABELS[scope]}</div>
-              <p className="mt-1 text-xs text-muted-foreground">{explanation}</p>
-            </div>
-          ))}
-        </div>
-      </Card>
 
       {(textChanged || props.image.selectedCount > 0 || props.consentChoice) && (
         <Card title="수정 전후 비교">
