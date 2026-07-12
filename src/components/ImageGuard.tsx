@@ -660,6 +660,30 @@ export default function ImageGuard({
     status,
   ]);
 
+  useEffect(() => {
+    if (!imageGetterRef) return;
+    imageGetterRef.current = async () => {
+      const img = imgRef.current;
+      if (!img || !imgSize) return null;
+      const MAX = 1280;
+      const r = Math.min(1, MAX / Math.max(imgSize.w, imgSize.h));
+      const w = Math.round(imgSize.w * r);
+      const h = Math.round(imgSize.h * r);
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext("2d");
+      if (!ctx) return null;
+      ctx.drawImage(img, 0, 0, w, h);
+      return c.toDataURL("image/jpeg", 0.82);
+    };
+    return () => {
+      if (imageGetterRef.current) imageGetterRef.current = null;
+    };
+  }, [imageGetterRef, imgSize]);
+
+
+
   return (
     <div className="space-y-5">
       <section
