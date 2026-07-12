@@ -218,6 +218,7 @@ function Home() {
               embedded
               scanSignal={scanSignal}
               onSnapshotChange={handleImageSnapshot}
+              imageGetterRef={imageGetterRef}
             />
           </Suspense>
           }
