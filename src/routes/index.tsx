@@ -104,15 +104,35 @@ function Home() {
     setSubmittedText(text);
     setSubmittedVisibility(visibility);
     if (imageSnapshot.hasImage) setScanSignal((value) => value + 1);
-    if (!text.trim()) return;
+
+    const hasImage = imageSnapshot.hasImage;
+    if (!text.trim() && !hasImage) return;
+
     setLoading(true);
     try {
-      const r = await analyze({ data: { text, visibility } });
+      let imageDataUrl: string | null = null;
+      if (hasImage && imageGetterRef.current) {
+        try {
+          imageDataUrl = await imageGetterRef.current();
+        } catch (err) {
+          console.error(
+            "Image encode failed",
+            err instanceof Error ? err.name : "UnknownError",
+          );
+        }
+      }
+      const payload: {
+        text: string;
+        visibility: Visibility;
+        image?: string;
+      } = { text, visibility };
+      if (imageDataUrl) payload.image = imageDataUrl;
+      const r = await analyze({ data: payload });
       setResponse(r);
       if (!analysisStarted) setInitialResponse(r);
     } catch (e) {
       console.error(
-        "Text analysis failed",
+        "Analysis failed",
         e instanceof Error ? e.name : "UnknownError",
       );
       const fallbackResponse: AnalysisResponse = {
