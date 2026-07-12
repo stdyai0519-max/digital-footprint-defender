@@ -27,11 +27,11 @@ export const Route = createFileRoute("/")({
         content:
           "SNS에 올리기 전, 나도 모르게 남긴 개인정보와 디지털 발자국을 확인하세요.",
       },
-      { property: "og:title", content: "Footprint Guard" },
+      { property: "og:title", content: "Footprint Guard — SNS 게시 전 개인정보 점검" },
       {
         property: "og:description",
         content:
-          "SNS 게시 전 직접 노출된 정보와 추론 가능한 디지털 발자국을 확인하고 안전한 문장으로 수정하세요.",
+          "SNS에 올리기 전, 나도 모르게 남긴 개인정보와 디지털 발자국을 확인하세요.",
       },
     ],
   }),
