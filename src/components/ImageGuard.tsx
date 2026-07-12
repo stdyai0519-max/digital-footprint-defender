@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 /* ---------------- Types ---------------- */
 
 type Effect = "blur" | "mosaic" | "black";
-type Source = "ocr" | "manual";
+type Source = "ocr" | "native" | "manual";
 
 interface Box {
   x: number;
@@ -21,6 +21,22 @@ interface Candidate {
   box: Box;
   selected: boolean;
   source: Source;
+}
+
+export interface ImageGuardSnapshot {
+  hasImage: boolean;
+  previewUrl: string | null;
+  status: Status;
+  candidateCount: number;
+  selectedCount: number;
+  categories: string[];
+  categoryCounts: Record<string, number>;
+}
+
+interface ImageGuardProps {
+  embedded?: boolean;
+  scanSignal?: number;
+  onSnapshotChange?: (snapshot: ImageGuardSnapshot) => void;
 }
 
 type Status =
@@ -46,6 +62,19 @@ interface RawMatch {
   reason: string;
   box: Box;
   confidence: number;
+}
+
+interface NativeDetection {
+  boundingBox: { x: number; y: number; width: number; height: number };
+}
+
+interface ShapeDetectionWindow extends Window {
+  FaceDetector?: new () => {
+    detect(source: CanvasImageSource): Promise<NativeDetection[]>;
+  };
+  BarcodeDetector?: new (options?: { formats?: string[] }) => {
+    detect(source: CanvasImageSource): Promise<NativeDetection[]>;
+  };
 }
 
 const RX_PHONE_MOBILE = /01[016789][-\s]?\d{3,4}[-\s]?\d{4}/g;
@@ -103,9 +132,67 @@ function classify(word: { text: string; box: Box; conf: number }): RawMatch[] {
   return out;
 }
 
+async function detectNativeVisuals(
+  image: HTMLImageElement,
+  size: { w: number; h: number },
+): Promise<Candidate[]> {
+  const browserWindow = window as ShapeDetectionWindow;
+  const candidates: Candidate[] = [];
+
+  if (browserWindow.FaceDetector) {
+    try {
+      const faces = await new browserWindow.FaceDetector().detect(image);
+      faces.forEach((face, index) => {
+        candidates.push({
+          id: `native-face-${Date.now()}-${index}`,
+          text: `얼굴 후보 ${index + 1}`,
+          category: "얼굴",
+          reason:
+            "브라우저가 얼굴 형태의 영역을 찾았습니다. 실제 인물 여부는 직접 확인하세요.",
+          confidence: null,
+          box: padBox(face.boundingBox, size),
+          selected: true,
+          source: "native",
+        });
+      });
+    } catch {
+      console.warn("Native face detection unavailable");
+    }
+  }
+
+  if (browserWindow.BarcodeDetector) {
+    try {
+      const codes = await new browserWindow.BarcodeDetector({
+        formats: ["qr_code"],
+      }).detect(image);
+      codes.forEach((code, index) => {
+        candidates.push({
+          id: `native-qr-${Date.now()}-${index}`,
+          text: `QR코드 후보 ${index + 1}`,
+          category: "QR코드",
+          reason:
+            "QR코드는 계정이나 연락처 등 추가 정보로 연결될 수 있어 확인이 필요합니다.",
+          confidence: null,
+          box: padBox(code.boundingBox, size),
+          selected: true,
+          source: "native",
+        });
+      });
+    } catch {
+      console.warn("Native QR detection unavailable");
+    }
+  }
+
+  return candidates;
+}
+
 /* ---------------- Component ---------------- */
 
-export default function ImageGuard() {
+export default function ImageGuard({
+  embedded = false,
+  scanSignal = 0,
+  onSnapshotChange,
+}: ImageGuardProps) {
   const [imgUrl, setImgUrl] = useState<string | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [imgSize, setImgSize] = useState<{ w: number; h: number } | null>(null);
@@ -117,6 +204,7 @@ export default function ImageGuard() {
   const [history, setHistory] = useState<Candidate[][]>([]);
 
   const [effect, setEffect] = useState<Effect>("blur");
+  const [manualCategory, setManualCategory] = useState("사용자 지정");
   const [strength, setStrength] = useState(12);
   const [showModified, setShowModified] = useState(false);
 
@@ -133,6 +221,7 @@ export default function ImageGuard() {
     active: boolean;
   } | null>(null);
   const [, forceTick] = useState(0);
+  const lastScanSignal = useRef(scanSignal);
 
   /* -------- upload -------- */
 
@@ -215,9 +304,14 @@ export default function ImageGuard() {
     setStatus("ocr-loading");
     setProgress(0);
     pushHistory();
+    const nativeCandidates = await detectNativeVisuals(
+      imgRef.current,
+      imgSize,
+    );
+    let worker: Awaited<ReturnType<(typeof import("tesseract.js"))["createWorker"]>> | null = null;
     try {
       const mod = await import("tesseract.js");
-      const worker = await mod.createWorker(["kor", "eng"], 1, {
+      worker = await mod.createWorker(["kor", "eng"], 1, {
         logger: (m: { status: string; progress: number }) => {
           if (m.status === "recognizing text") {
             setStatus("ocr-running");
@@ -226,7 +320,6 @@ export default function ImageGuard() {
         },
       });
       const result = await worker.recognize(imgRef.current);
-      await worker.terminate();
 
       const words: { text: string; box: Box; conf: number }[] = [];
       const data = result.data as unknown as {
@@ -279,16 +372,34 @@ export default function ImageGuard() {
         )
           deduped.push(c);
       }
-      setCandidates((prev) => [...prev, ...deduped]);
+      setCandidates((prev) => [
+        ...prev.filter((candidate) => candidate.source === "manual"),
+        ...nativeCandidates,
+        ...deduped,
+      ]);
       setStatus("done");
     } catch (e) {
       console.error("OCR failed");
+      setCandidates((prev) => [
+        ...prev.filter((candidate) => candidate.source === "manual"),
+        ...nativeCandidates,
+      ]);
       setStatus("ocr-failed");
       setErrMsg(
         "자동 글자 인식에 실패했습니다. 직접 영역 선택으로 개인정보를 가릴 수 있습니다.",
       );
+    } finally {
+      await worker?.terminate().catch(() => undefined);
     }
   }
+
+  useEffect(() => {
+    if (scanSignal === lastScanSignal.current) return;
+    lastScanSignal.current = scanSignal;
+    if (imgRef.current && imgSize) void runOcr();
+    // scanSignal is an imperative request from the unified composer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanSignal, imgSize]);
 
   /* -------- history -------- */
   function pushHistory() {
@@ -446,8 +557,8 @@ export default function ImageGuard() {
         {
           id: `manual-${Date.now()}`,
           text: "",
-          category: "사용자 지정",
-          reason: "사용자가 직접 선택한 영역입니다.",
+          category: manualCategory,
+          reason: `${manualCategory} 후보로 사용자가 직접 선택한 영역입니다.`,
           confidence: null,
           box: {
             x: Math.max(0, rx),
@@ -511,10 +622,52 @@ export default function ImageGuard() {
     [candidates],
   );
 
+  const categories = useMemo(
+    () => Array.from(new Set(candidates.map((c) => c.category))),
+    [candidates],
+  );
+  const categoryCounts = useMemo(
+    () =>
+      candidates.reduce<Record<string, number>>((counts, candidate) => {
+        counts[candidate.category] = (counts[candidate.category] ?? 0) + 1;
+        return counts;
+      }, {}),
+    [candidates],
+  );
+
+  useEffect(() => {
+    onSnapshotChange?.({
+      hasImage: Boolean(imgUrl && imgSize),
+      previewUrl: imgUrl,
+      status,
+      candidateCount: candidates.length,
+      selectedCount,
+      categories,
+      categoryCounts,
+    });
+  }, [
+    categories,
+    categoryCounts,
+    candidates.length,
+    imgSize,
+    imgUrl,
+    onSnapshotChange,
+    selectedCount,
+    status,
+  ]);
+
   return (
     <div className="space-y-5">
-      <section className="rounded-2xl border border-border bg-card p-5 sm:p-6">
-        <h2 className="text-lg font-bold">이미지 개인정보 가리기</h2>
+      <section
+        className={
+          embedded
+            ? "rounded-xl border border-border bg-muted/20 p-4"
+            : "rounded-2xl border border-border bg-card p-5 sm:p-6"
+        }
+      >
+        <h2 className={embedded ? "text-sm font-semibold" : "text-lg font-bold"}>
+          사진 첨부 (선택)
+        </h2>
         <p className="mt-1 text-sm text-muted-foreground">
           사진 속 전화번호, 주소, 학교명 등 개인정보 후보를 기기 안에서 찾아
           가릴 수 있습니다.
@@ -569,17 +722,46 @@ export default function ImageGuard() {
         <>
           <section className="rounded-2xl border border-border bg-card p-4">
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={runOcr}
-                disabled={status === "ocr-loading" || status === "ocr-running"}
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50"
-              >
-                {status === "ocr-loading"
-                  ? "OCR 준비 중..."
-                  : status === "ocr-running"
-                    ? `분석 중 ${progress}%`
-                    : "개인정보 후보 찾기"}
-              </button>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                직접 영역 종류
+                <select
+                  value={manualCategory}
+                  onChange={(event) => setManualCategory(event.target.value)}
+                  className="rounded-lg border border-border bg-card px-2 py-2 text-sm text-foreground"
+                >
+                  {[
+                    "사용자 지정",
+                    "얼굴",
+                    "명찰·신분증",
+                    "학교·소속",
+                    "QR코드",
+                    "연락처",
+                  ].map((category) => (
+                    <option key={category}>{category}</option>
+                  ))}
+                </select>
+              </label>
+              {!embedded && (
+                <button
+                  onClick={runOcr}
+                  disabled={status === "ocr-loading" || status === "ocr-running"}
+                  className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50"
+                >
+                  {status === "ocr-loading"
+                    ? "OCR 준비 중..."
+                    : status === "ocr-running"
+                      ? `분석 중 ${progress}%`
+                      : "개인정보 후보 찾기"}
+                </button>
+              )}
+              {embedded &&
+                (status === "ocr-loading" || status === "ocr-running") && (
+                  <span className="rounded-lg bg-primary/10 px-3 py-2 text-xs font-medium text-primary">
+                    {status === "ocr-loading"
+                      ? "이미지 분석 준비 중..."
+                      : `이미지 분석 중 ${progress}%`}
+                  </span>
+                )}
               <button
                 onClick={undo}
                 disabled={history.length === 0}
@@ -729,7 +911,11 @@ export default function ImageGuard() {
                           {c.category}
                         </span>
                         <span className="text-[11px] text-muted-foreground">
-                          {c.source === "ocr" ? "자동 탐지" : "직접 지정"}
+                          {c.source === "manual"
+                            ? "직접 지정"
+                            : c.source === "native"
+                              ? "브라우저 자동 탐지"
+                              : "OCR 자동 탐지"}
                           {c.confidence !== null &&
                             ` · 신뢰도 ${Math.round(c.confidence * 100)}%`}
                         </span>

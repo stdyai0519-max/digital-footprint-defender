@@ -1,21 +1,24 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { lazy, Suspense, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
 import {
   DEMO_RESULT,
   EXAMPLE_POST,
   MAX_INPUT_LENGTH,
   VISIBILITY_LABELS,
   type AnalysisResponse,
-  type AnalysisResult,
   type AnalysisSource,
   type Visibility,
 } from "../lib/analyze";
 import { analyzeFootprint } from "../lib/analyze.functions";
+import type { ImageGuardSnapshot } from "../components/ImageGuard";
+import {
+  AUDIENCE_GUIDANCE,
+  derivePostSignals,
+  type ConsentChoice,
+} from "../lib/post-analysis";
 
 const ImageGuard = lazy(() => import("../components/ImageGuard"));
-
-type Tab = "text" | "image";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -40,22 +43,53 @@ export const Route = createFileRoute("/")({
 const VISIBILITIES: Visibility[] = ["public", "friends", "group", "dm"];
 
 function Home() {
-  const [tab, setTab] = useState<Tab>("text");
   const [text, setText] = useState("");
   const [visibility, setVisibility] = useState<Visibility>("public");
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<AnalysisResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [analysisStarted, setAnalysisStarted] = useState(false);
+  const [submittedText, setSubmittedText] = useState("");
+  const [submittedVisibility, setSubmittedVisibility] =
+    useState<Visibility>("public");
+  const [initialText, setInitialText] = useState("");
+  const [initialResponse, setInitialResponse] =
+    useState<AnalysisResponse | null>(null);
+  const [consentChoice, setConsentChoice] =
+    useState<ConsentChoice | null>(null);
+  const [scanSignal, setScanSignal] = useState(0);
+  const [imageSnapshot, setImageSnapshot] = useState<ImageGuardSnapshot>({
+    hasImage: false,
+    previewUrl: null,
+    status: "idle",
+    candidateCount: 0,
+    selectedCount: 0,
+    categories: [],
+    categoryCounts: {},
+  });
+  const composerRef = useRef<HTMLDivElement | null>(null);
 
   const analyze = useServerFn(analyzeFootprint);
 
   const charCount = text.length;
   const overLimit = charCount > MAX_INPUT_LENGTH;
-  const canAnalyze = text.trim().length > 0 && !overLimit && !loading;
+  const imageLoading =
+    imageSnapshot.status === "image-loading" ||
+    imageSnapshot.status === "ocr-loading" ||
+    imageSnapshot.status === "ocr-running";
+  const combinedLoading = loading || imageLoading;
+  const canAnalyze =
+    (text.trim().length > 0 || imageSnapshot.hasImage) &&
+    !overLimit &&
+    !combinedLoading;
+
+  const handleImageSnapshot = useCallback((snapshot: ImageGuardSnapshot) => {
+    setImageSnapshot(snapshot);
+  }, []);
 
   async function handleAnalyze() {
-    if (!text.trim()) {
-      setError("분석할 게시글을 먼저 입력해 주세요.");
+    if (!text.trim() && !imageSnapshot.hasImage) {
+      setError("게시글을 입력하거나 사진을 첨부해 주세요.");
       return;
     }
     if (overLimit) {
@@ -63,18 +97,30 @@ function Home() {
       return;
     }
     setError(null);
-    setLoading(true);
     setResponse(null);
+    if (!analysisStarted) setInitialText(text);
+    setAnalysisStarted(true);
+    setSubmittedText(text);
+    setSubmittedVisibility(visibility);
+    if (imageSnapshot.hasImage) setScanSignal((value) => value + 1);
+    if (!text.trim()) return;
+    setLoading(true);
     try {
       const r = await analyze({ data: { text, visibility } });
       setResponse(r);
+      if (!analysisStarted) setInitialResponse(r);
     } catch (e) {
-      console.error(e);
-      setResponse({
+      console.error(
+        "Text analysis failed",
+        e instanceof Error ? e.name : "UnknownError",
+      );
+      const fallbackResponse: AnalysisResponse = {
         source: "demo",
         result: DEMO_RESULT,
         notice: "AI 분석을 사용할 수 없어 데모 결과를 표시합니다.",
-      });
+      };
+      setResponse(fallbackResponse);
+      if (!analysisStarted) setInitialResponse(fallbackResponse);
     } finally {
       setLoading(false);
     }
@@ -84,6 +130,10 @@ function Home() {
     setResponse(null);
     setText("");
     setError(null);
+    setAnalysisStarted(false);
+    setInitialText("");
+    setInitialResponse(null);
+    setConsentChoice(null);
   }
 
   return (
@@ -119,70 +169,78 @@ function Home() {
           </p>
         </section>
 
-        <div
-          role="tablist"
-          className="mb-6 inline-flex rounded-lg border border-border bg-card p-1"
-        >
-          {(
-            [
-              { id: "text" as const, label: "게시글 개인정보 점검" },
-              { id: "image" as const, label: "이미지 개인정보 가리기" },
-            ]
-          ).map((t) => (
-            <button
-              key={t.id}
-              role="tab"
-              aria-selected={tab === t.id}
-              onClick={() => setTab(t.id)}
-              className={
-                "rounded-md px-3 py-1.5 text-sm transition " +
-                (tab === t.id
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground")
-              }
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-
-        {tab === "text" && (
-          <>
-            <InputPanel
-              text={text}
-              onText={setText}
-              visibility={visibility}
-              onVisibility={setVisibility}
-              charCount={charCount}
-              overLimit={overLimit}
-              onExample={() => {
-                setText(EXAMPLE_POST);
-                setError(null);
-              }}
-              onAnalyze={handleAnalyze}
-              canAnalyze={canAnalyze}
-              loading={loading}
-              error={error}
-            />
-
-            {loading && <LoadingCard />}
-
-            {response && (
-              <ResultView response={response} onReset={handleReset} />
-            )}
-          </>
-        )}
-
-        {tab === "image" && (
+        <div ref={composerRef}>
+        <InputPanel
+          text={text}
+          onText={setText}
+          visibility={visibility}
+          onVisibility={setVisibility}
+          charCount={charCount}
+          overLimit={overLimit}
+          onExample={() => {
+            setText(EXAMPLE_POST);
+            setError(null);
+          }}
+          onAnalyze={handleAnalyze}
+          canAnalyze={canAnalyze}
+          loading={combinedLoading}
+          error={error}
+          imageEditor={
           <Suspense
             fallback={
-              <div className="rounded-2xl border border-border bg-card p-6 text-sm text-muted-foreground">
+              <div className="rounded-xl border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
                 이미지 편집기를 불러오는 중...
               </div>
             }
           >
-            <ImageGuard />
+            <ImageGuard
+              embedded
+              scanSignal={scanSignal}
+              onSnapshotChange={handleImageSnapshot}
+            />
           </Suspense>
+          }
+        />
+        </div>
+
+        {combinedLoading && <LoadingCard />}
+
+        {analysisStarted && !combinedLoading && (
+          <UnifiedResultHeader
+            text={submittedText}
+            visibility={submittedVisibility}
+            image={imageSnapshot}
+            response={response}
+            onEdit={() =>
+              composerRef.current?.scrollIntoView({ behavior: "smooth" })
+            }
+          />
+        )}
+
+        {response && submittedText.trim() && (
+          <ResultView
+            response={response}
+            onReset={handleReset}
+            onApplyText={(nextText) => {
+              setText(nextText);
+              composerRef.current?.scrollIntoView({ behavior: "smooth" });
+            }}
+          />
+        )}
+
+        {analysisStarted && !combinedLoading && (
+          <PostActionCards
+            submittedText={submittedText}
+            currentText={text}
+            visibility={visibility}
+            image={imageSnapshot}
+            response={response}
+            initialText={initialText}
+            initialResponse={initialResponse}
+            consentChoice={consentChoice}
+            onConsent={setConsentChoice}
+            onRecheck={handleAnalyze}
+          />
         )}
 
         <footer className="mt-16 border-t border-border/60 pt-6 text-[11px] text-muted-foreground">
@@ -208,6 +266,7 @@ function InputPanel(props: {
   canAnalyze: boolean;
   loading: boolean;
   error: string | null;
+  imageEditor: React.ReactNode;
 }) {
   return (
     <section className="rounded-2xl border border-border bg-card p-5 sm:p-6">
@@ -236,6 +295,8 @@ function InputPanel(props: {
           가상 예시 불러오기
         </button>
       </div>
+
+      <div className="mt-5">{props.imageEditor}</div>
 
       <div className="mt-5">
         <div className="text-sm font-medium mb-2">게시 범위</div>
@@ -274,7 +335,9 @@ function InputPanel(props: {
           disabled={!props.canAnalyze}
           className="inline-flex items-center justify-center rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {props.loading ? "분석 중..." : "분석하기"}
+          {props.loading
+            ? "게시물의 디지털 발자국을 점검하고 있습니다."
+            : "게시 전 개인정보 점검"}
         </button>
       </div>
     </section>
@@ -286,9 +349,308 @@ function LoadingCard() {
     <div className="mt-6 rounded-2xl border border-border bg-card p-6 text-sm text-muted-foreground">
       <div className="flex items-center gap-3">
         <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-primary" />
-        디지털 발자국을 분석하고 있습니다...
+        게시물의 디지털 발자국을 점검하고 있습니다. 이미지 분석은 기기 안에서 처리됩니다.
       </div>
     </div>
+  );
+}
+
+function UnifiedResultHeader(props: {
+  text: string;
+  visibility: Visibility;
+  image: ImageGuardSnapshot;
+  response: AnalysisResponse | null;
+  onEdit: () => void;
+}) {
+  const directCount = props.response?.result.direct_exposures.length ?? 0;
+  const connectedCount = props.response?.result.inferred_exposures.length ?? 0;
+  const status =
+    props.response?.result.status ??
+    (props.image.candidateCount > 0 ? "일부 수정 권장" : "그대로 게시 가능");
+
+  return (
+    <section className="mt-8 space-y-4">
+      <div className="rounded-2xl border border-border bg-card p-5 sm:p-6">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-muted-foreground">
+            입력 게시물 미리보기
+          </h2>
+          <button onClick={props.onEdit} className="text-xs text-primary hover:underline">
+            게시글 수정
+          </button>
+        </div>
+        {props.text.trim() && (
+          <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed">{props.text}</p>
+        )}
+        {props.image.previewUrl && (
+          <img
+            src={props.image.previewUrl}
+            alt="첨부 이미지 미리보기"
+            className="mt-3 max-h-64 w-full rounded-xl border border-border object-contain"
+          />
+        )}
+        <div className="mt-3 text-xs text-muted-foreground">
+          공개 범위: {VISIBILITY_LABELS[props.visibility]}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-primary/40 bg-primary/10 p-5 sm:p-6">
+        <div className="text-[11px] uppercase tracking-wider text-primary">게시 준비 상태</div>
+        <h2 className="mt-1 text-2xl font-bold">{status}</h2>
+        <div className="mt-4 flex flex-wrap gap-2 text-xs">
+          {props.text.trim() && (
+            <span className="rounded-full bg-card px-3 py-1">직접 노출 {directCount}개</span>
+          )}
+          {props.text.trim() && connectedCount > 0 && (
+            <span className="rounded-full bg-card px-3 py-1">연결 단서 {connectedCount}개</span>
+          )}
+          {props.image.hasImage && (
+            <span className="rounded-full bg-card px-3 py-1">
+              이미지 후보 {props.image.candidateCount}개
+            </span>
+          )}
+        </div>
+        <div className="mt-4 space-y-1 text-[11px] text-muted-foreground">
+          {props.text.trim() && (
+            <div>
+              텍스트: {props.response?.source === "ai" ? "실시간 AI 분석" : "데모 대체 결과"}
+            </div>
+          )}
+          {props.image.hasImage && (
+            <div>
+              이미지: {props.image.status === "ocr-failed" ? "OCR 실패 — 브라우저 탐지·수동 편집 가능" : "기기 내 OCR·브라우저 탐지"}
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function PostActionCards(props: {
+  submittedText: string;
+  currentText: string;
+  visibility: Visibility;
+  image: ImageGuardSnapshot;
+  response: AnalysisResponse | null;
+  initialText: string;
+  initialResponse: AnalysisResponse | null;
+  consentChoice: ConsentChoice | null;
+  onConsent: (choice: ConsentChoice) => void;
+  onRecheck: () => void;
+}) {
+  const { mentions, thirdPartyDetected, hasCrossMediaConnection } =
+    derivePostSignals({
+      text: props.submittedText,
+      hasImage: props.image.hasImage,
+      categories: props.image.categories,
+      categoryCounts: props.image.categoryCounts,
+    });
+  const textConnections = props.response?.result.inferred_exposures ?? [];
+  const textChanged = props.initialText !== props.currentText;
+  const beforeDirect = props.initialResponse?.result.direct_exposures.length ?? 0;
+  const afterDirect = props.response?.result.direct_exposures.length ?? 0;
+
+  return (
+    <section className="mt-5 space-y-5">
+      {(props.response?.result.direct_exposures.length ||
+        props.image.candidateCount > 0 ||
+        mentions.length > 0) && (
+        <Card title="발견된 개인정보">
+          <div className="space-y-4">
+            {(props.response?.result.direct_exposures.length ?? 0) > 0 && (
+              <div>
+                <h4 className="text-sm font-semibold">내 정보 또는 소유자 확인 필요</h4>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  {props.response?.result.direct_exposures.map((exposure, index) => (
+                    <div key={index} className="rounded-xl border border-border p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-medium">{exposure.text}</span>
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-[11px]">
+                          {exposure.category}
+                        </span>
+                        <span className="text-[11px] text-muted-foreground">텍스트</span>
+                      </div>
+                      <p className="mt-2 text-xs text-muted-foreground">{exposure.reason}</p>
+                      <p className="mt-2 text-[11px] text-muted-foreground">
+                        확신 수준: {exposure.certainty ?? "확인 필요"}
+                      </p>
+                      <p className="mt-1 text-[11px] text-primary">
+                        권장 행동: 구체적인 표현을 줄이거나 공개 범위를 재검토하세요.
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {(mentions.length > 0 || thirdPartyDetected) && (
+              <div>
+                <h4 className="text-sm font-semibold">타인 정보</h4>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  {mentions.map((mention) => (
+                    <div key={mention} className="rounded-xl border border-warn/40 bg-warn/5 p-3">
+                      <div className="text-sm font-medium">친구 계정 {mention}</div>
+                      <div className="mt-1 text-[11px] text-muted-foreground">출처: 텍스트 · 확신 수준: 명확함</div>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        특정 계정과 게시물을 연결할 수 있습니다.
+                      </p>
+                      <p className="mt-1 text-[11px] text-primary">
+                        권장 행동: 당사자에게 태그와 게시 여부를 확인하세요.
+                      </p>
+                    </div>
+                  ))}
+                  {props.image.categories
+                    .filter((category) =>
+                      ["얼굴", "명찰·신분증", "연락처"].includes(category),
+                    )
+                    .map((category) => (
+                      <div key={category} className="rounded-xl border border-warn/40 bg-warn/5 p-3">
+                        <div className="text-sm font-medium">{category} 후보</div>
+                        <div className="mt-1 text-[11px] text-muted-foreground">출처: 이미지 · 확신 수준: 확인 필요</div>
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          타인의 정보인지 직접 확인해야 합니다.
+                        </p>
+                        <p className="mt-1 text-[11px] text-primary">
+                          권장 행동: 영역을 가리거나 게시 허락을 확인하세요.
+                        </p>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {(textConnections.length > 0 || hasCrossMediaConnection) && (
+        <Card title="서로 연결되는 단서">
+          <div className="space-y-3">
+            {hasCrossMediaConnection && (
+              <div className="rounded-xl border border-border p-4">
+                <div className="flex flex-wrap gap-2 text-[11px]">
+                  {mentions.map((mention) => (
+                    <span key={mention} className="rounded-md bg-muted px-2 py-1">
+                      {mention} · 텍스트
+                    </span>
+                  ))}
+                  {props.image.categories.map((category) => (
+                    <span key={category} className="rounded-md bg-muted px-2 py-1">
+                      {category} · 이미지
+                    </span>
+                  ))}
+                </div>
+                <p className="mt-3 text-sm leading-relaxed">
+                  계정 태그와 이미지 속 인물·소속 후보를 서로 연결하는 단서가 될 가능성이 있습니다.
+                </p>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  태그를 확인하고 얼굴·명찰·학교 표시를 가리거나 공개 범위를 재검토하세요.
+                </p>
+              </div>
+            )}
+            {textConnections.map((connection, index) => (
+              <div key={index} className="rounded-xl border border-border p-4">
+                <div className="flex flex-wrap gap-1.5">
+                  {connection.used_clues.map((clue) => (
+                    <span key={clue} className="rounded-md bg-muted px-2 py-1 text-[11px]">
+                      {clue} · 텍스트
+                    </span>
+                  ))}
+                </div>
+                <p className="mt-3 text-sm font-medium">{connection.inference}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{connection.reason}</p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {thirdPartyDetected && (
+        <Card title="타인 동의 확인">
+          <p className="text-sm leading-relaxed">
+            타인의 정보가 포함되어 있을 수 있습니다. 친구 계정 태그, 얼굴 또는 명찰 후보를 확인하고 업로드 전에 당사자의 허락을 받았는지 확인하세요.
+          </p>
+          <div className="mt-4 grid gap-2 sm:grid-cols-3">
+            {([
+              ["confirmed", "게시 허락을 확인했습니다"],
+              ["pending", "아직 확인하지 못했습니다"],
+              ["remove", "타인의 정보를 제거하겠습니다"],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                onClick={() => props.onConsent(value)}
+                className={
+                  "rounded-lg border px-3 py-2 text-sm " +
+                  (props.consentChoice === value
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border hover:bg-muted")
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {props.consentChoice === "pending" && (
+            <p className="mt-3 text-xs text-warn">
+              친구 태그 삭제, 얼굴·프로필 정보 가리기, 공개 범위 축소 또는 당사자 확인을 권장합니다.
+            </p>
+          )}
+          <p className="mt-3 text-[11px] text-muted-foreground">
+            이 선택은 현재 페이지 메모리에만 유지되며 실제 동의 여부를 AI가 판단하거나 증명하지 않습니다.
+          </p>
+        </Card>
+      )}
+
+      <Card title="공개 범위 비교">
+        <div className="grid gap-2 sm:grid-cols-2">
+          {AUDIENCE_GUIDANCE.map(({ scope, explanation }) => (
+            <div
+              key={scope}
+              className={
+                "rounded-xl border p-3 " +
+                (props.visibility === scope ? "border-primary bg-primary/5" : "border-border")
+              }
+            >
+              <div className="text-sm font-semibold">{VISIBILITY_LABELS[scope]}</div>
+              <p className="mt-1 text-xs text-muted-foreground">{explanation}</p>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {(textChanged || props.image.selectedCount > 0 || props.consentChoice) && (
+        <Card title="수정 전후 비교">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-xl bg-muted/40 p-4 text-sm">
+              <div className="font-semibold">수정 전</div>
+              <div className="mt-2 text-xs text-muted-foreground">직접 노출 {beforeDirect}개</div>
+            </div>
+            <div className="rounded-xl bg-primary/5 p-4 text-sm">
+              <div className="font-semibold">현재 상태</div>
+              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                <div>직접 노출 {afterDirect}개</div>
+                <div>문장 변경 {textChanged ? "있음" : "없음"}</div>
+                {props.image.hasImage && <div>가림 선택 영역 {props.image.selectedCount}개</div>}
+                {thirdPartyDetected && <div>타인 확인: {props.consentChoice ? "선택됨" : "확인 필요"}</div>}
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      <div className="flex justify-center">
+        <button
+          onClick={props.onRecheck}
+          className="rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground"
+        >
+          수정된 게시물 다시 점검
+        </button>
+      </div>
+
+      <div className="rounded-xl border border-border bg-muted/30 p-4 text-xs leading-relaxed text-muted-foreground">
+        AI 분석은 개인정보 후보를 제안하는 보조 기능이며 정확한 신원, 주소 또는 동의 여부를 판단하지 않습니다. 자동 분석이 놓친 정보가 있을 수 있으므로 최종 게시 전 직접 확인하세요. 게시글은 서버 측 AI 분석에 전달될 수 있고, 이미지는 현재 기기 안에서 OCR·Canvas로 처리됩니다. 원본·수정본·결과는 별도로 저장하지 않으며 새로고침하면 초기화됩니다.
+      </div>
+    </section>
   );
 }
 
@@ -318,9 +680,11 @@ function SourceBadge({ source }: { source: AnalysisSource }) {
 function ResultView({
   response,
   onReset,
+  onApplyText,
 }: {
   response: AnalysisResponse;
   onReset: () => void;
+  onApplyText: (text: string) => void;
 }) {
   const { result, source, notice } = response;
   return (
@@ -334,84 +698,16 @@ function ResultView({
         )}
       </div>
 
-      {/* 1. Status */}
-      <StatusBanner result={result} />
-
-      {/* 2. Summary */}
+      {/* Summary */}
       <Card title="분석 요약">
         <p className="text-sm leading-relaxed">{result.summary}</p>
       </Card>
 
-      {/* 3. Direct exposures */}
-      <Card title="직접 노출된 정보">
-        {result.direct_exposures.length === 0 ? (
-          <EmptyText>직접 노출된 개인정보를 찾지 못했습니다.</EmptyText>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2">
-            {result.direct_exposures.map((d, i) => (
-              <div
-                key={i}
-                className="rounded-xl border border-border bg-muted/40 p-4"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="font-semibold text-sm break-keep">
-                    {d.text}
-                  </div>
-                  <span className="shrink-0 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
-                    {d.category}
-                  </span>
-                </div>
-                <p className="mt-2 text-xs text-muted-foreground leading-relaxed">
-                  {d.reason}
-                </p>
-                {d.certainty && (
-                  <div className="mt-2 text-[11px] text-muted-foreground">
-                    확실성: <span className="text-foreground">{d.certainty}</span>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-
-      {/* 4. Inferred */}
-      <Card title="조합으로 추론 가능한 정보">
-        {result.inferred_exposures.length === 0 ? (
-          <EmptyText>조합으로 추론될 만한 정보를 찾지 못했습니다.</EmptyText>
-        ) : (
-          <div className="space-y-4">
-            {result.inferred_exposures.map((inf, i) => (
-              <div key={i} className="rounded-xl border border-border p-4">
-                <div className="text-sm font-semibold">{inf.inference}</div>
-                {inf.used_clues.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {inf.used_clues.map((c, j) => (
-                      <span
-                        key={j}
-                        className="rounded-md bg-muted px-2 py-0.5 text-[11px] text-muted-foreground"
-                      >
-                        {c}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                <p className="mt-3 text-xs text-muted-foreground leading-relaxed">
-                  {inf.reason}
-                </p>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-
-      {/* 5. Priority actions */}
-      <Card title="가장 먼저 수정할 항목">
-        {result.priority_actions.length === 0 ? (
-          <EmptyText>추가로 수정할 항목이 없습니다.</EmptyText>
-        ) : (
+      {/* Priority actions */}
+      {result.priority_actions.length > 0 && (
+        <Card title="가장 먼저 수정할 항목">
           <ol className="space-y-2">
-            {result.priority_actions.map((a, i) => (
+            {result.priority_actions.slice(0, 5).map((a, i) => (
               <li key={i} className="flex gap-3 text-sm">
                 <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[11px] font-semibold text-primary">
                   {i + 1}
@@ -420,21 +716,21 @@ function ResultView({
               </li>
             ))}
           </ol>
-        )}
-      </Card>
+        </Card>
+      )}
 
-      {/* 6. Safe rewrites */}
+      {/* Safe rewrites */}
       {result.safe_rewrites.length > 0 && (
         <Card title="안전한 수정문">
           <div className="space-y-3">
             {result.safe_rewrites.map((r, i) => (
-              <RewriteCard key={i} rewrite={r} />
+              <RewriteCard key={i} rewrite={r} onApply={onApplyText} />
             ))}
           </div>
         </Card>
       )}
 
-      {/* 7. Uncertainty */}
+      {/* Uncertainty */}
       {result.uncertainty && (
         <div className="rounded-xl border border-border bg-muted/30 p-4 text-xs leading-relaxed text-muted-foreground">
           {result.uncertainty}
@@ -451,47 +747,6 @@ function ResultView({
       </div>
     </section>
   );
-}
-
-function StatusBanner({ result }: { result: AnalysisResult }) {
-  const isSafe = result.status === "그대로 게시 가능";
-  const isPartial = result.status === "일부 수정 권장";
-  const color = isSafe
-    ? "border-primary/40 bg-primary/10 text-primary"
-    : isPartial
-      ? "border-warn/40 bg-warn/10 text-warn"
-      : "border-warn/40 bg-warn/10 text-warn";
-  const iconBg = isSafe ? "bg-primary/20 text-primary" : "bg-warn/20 text-warn";
-  const glyph = isSafe ? "✓" : "!";
-  return (
-    <div className={"rounded-2xl border p-5 sm:p-6 " + color}>
-      <div className="flex items-start gap-3">
-        <div
-          className={
-            "mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full " +
-            iconBg
-          }
-        >
-          {glyph}
-        </div>
-        <div className="flex-1">
-          <div className="text-[11px] uppercase tracking-wider opacity-80">
-            게시 전 상태
-          </div>
-          <h2 className="mt-0.5 text-xl sm:text-2xl font-bold text-foreground">
-            {result.status}
-          </h2>
-          <p className="mt-2 text-xs text-muted-foreground">
-            이 결과는 절대적인 안전 판정이 아니라, 게시 전 참고용 분석입니다.
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function EmptyText({ children }: { children: React.ReactNode }) {
-  return <p className="text-sm text-muted-foreground">{children}</p>;
 }
 
 function Card({
@@ -511,7 +766,13 @@ function Card({
   );
 }
 
-function RewriteCard({ rewrite }: { rewrite: { style: string; text: string } }) {
+function RewriteCard({
+  rewrite,
+  onApply,
+}: {
+  rewrite: { style: string; text: string };
+  onApply: (text: string) => void;
+}) {
   const [copied, setCopied] = useState(false);
   const isPriority = useMemo(() => rewrite.style.includes("안전"), [rewrite]);
 
@@ -545,12 +806,14 @@ function RewriteCard({ rewrite }: { rewrite: { style: string; text: string } }) 
         >
           {rewrite.style}
         </span>
-        <button
-          onClick={copy}
-          className="text-xs text-primary hover:underline"
-        >
-          {copied ? "복사됨" : "복사"}
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={() => onApply(rewrite.text)} className="text-xs font-medium text-primary hover:underline">
+            {rewrite.style.includes("안전") ? "안전 우선 수정문 적용" : "최소 수정문 적용"}
+          </button>
+          <button onClick={copy} className="text-xs text-muted-foreground hover:underline">
+            {copied ? "복사됨" : "복사"}
+          </button>
+        </div>
       </div>
       <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed">
         {rewrite.text}

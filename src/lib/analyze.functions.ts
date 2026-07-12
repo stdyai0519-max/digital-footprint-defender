@@ -18,6 +18,9 @@ const InputSchema = z.object({
   visibility: z.enum(["public", "friends", "group", "dm"]),
 });
 
+const GATEWAY_TIMEOUT_MS = 15_000;
+const DEFAULT_MODEL = "google/gemini-3-flash-preview";
+
 const ALLOWED_STATUS = new Set([
   "그대로 게시 가능",
   "일부 수정 권장",
@@ -150,14 +153,16 @@ async function callGateway(
   text: string,
   visibility: Visibility,
 ): Promise<string> {
+  const model = process.env.LOVABLE_MODEL?.trim() || DEFAULT_MODEL;
   const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
+    signal: AbortSignal.timeout(GATEWAY_TIMEOUT_MS),
     headers: {
       "Content-Type": "application/json",
       "Lovable-API-Key": apiKey,
     },
     body: JSON.stringify({
-      model: "google/gemini-3-flash-preview",
+      model,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: buildUserPrompt(text, visibility) },
@@ -178,7 +183,7 @@ async function callGateway(
 }
 
 export const analyzeFootprint = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) => InputSchema.parse(input))
+  .validator((input: unknown) => InputSchema.parse(input))
   .handler(async ({ data }): Promise<AnalysisResponse> => {
     const apiKey = process.env.LOVABLE_API_KEY;
     if (!apiKey) {
