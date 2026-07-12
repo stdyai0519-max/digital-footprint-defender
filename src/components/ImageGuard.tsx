@@ -701,8 +701,8 @@ export default function ImageGuard({
           가릴 수 있습니다.
         </p>
         <div className="mt-3 rounded-lg border border-primary/30 bg-primary/5 p-3 text-xs text-muted-foreground leading-relaxed">
-          이미지는 외부 서버로 전송하거나 저장하지 않습니다. 자동 탐지는
-          완벽하지 않으므로 다운로드 전에 결과를 직접 확인하세요.
+          기본 OCR과 편집은 기기에서 처리됩니다. AI 사진 분석 시 축소된
+          이미지가 분석 서버로 일시 전송되며 앱에 저장되지 않습니다.
         </div>
       </section>
 
