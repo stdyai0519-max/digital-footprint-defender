@@ -195,6 +195,7 @@ export default function ImageGuard({
   embedded = false,
   scanSignal = 0,
   onSnapshotChange,
+  imageGetterRef,
 }: ImageGuardProps) {
   const [imgUrl, setImgUrl] = useState<string | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
