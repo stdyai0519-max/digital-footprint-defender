@@ -54,8 +54,8 @@ export const EXAMPLE_POST =
 export const VISIBILITY_LABELS: Record<Visibility, string> = {
   public: "전체 공개",
   friends: "친구 공개",
-  group: "단체 채팅",
-  dm: "개인 메시지",
+  group: "그룹",
+  dm: "DM",
 };
 
 export const MAX_INPUT_LENGTH = 1500;
