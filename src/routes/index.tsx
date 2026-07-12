@@ -68,6 +68,7 @@ function Home() {
     categoryCounts: {},
   });
   const composerRef = useRef<HTMLDivElement | null>(null);
+  const imageGetterRef = useRef<(() => Promise<string | null>) | null>(null);
 
   const analyze = useServerFn(analyzeFootprint);
 
