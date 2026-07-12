@@ -239,7 +239,7 @@ function Home() {
           />
         )}
 
-        {response && submittedText.trim() && (
+        {response && (
           <ResultView
             response={response}
             onReset={handleReset}
