@@ -68,6 +68,7 @@ function Home() {
     categoryCounts: {},
   });
   const composerRef = useRef<HTMLDivElement | null>(null);
+  const imageGetterRef = useRef<(() => Promise<string | null>) | null>(null);
 
   const analyze = useServerFn(analyzeFootprint);
 
@@ -103,15 +104,35 @@ function Home() {
     setSubmittedText(text);
     setSubmittedVisibility(visibility);
     if (imageSnapshot.hasImage) setScanSignal((value) => value + 1);
-    if (!text.trim()) return;
+
+    const hasImage = imageSnapshot.hasImage;
+    if (!text.trim() && !hasImage) return;
+
     setLoading(true);
     try {
-      const r = await analyze({ data: { text, visibility } });
+      let imageDataUrl: string | null = null;
+      if (hasImage && imageGetterRef.current) {
+        try {
+          imageDataUrl = await imageGetterRef.current();
+        } catch (err) {
+          console.error(
+            "Image encode failed",
+            err instanceof Error ? err.name : "UnknownError",
+          );
+        }
+      }
+      const payload: {
+        text: string;
+        visibility: Visibility;
+        image?: string;
+      } = { text, visibility };
+      if (imageDataUrl) payload.image = imageDataUrl;
+      const r = await analyze({ data: payload });
       setResponse(r);
       if (!analysisStarted) setInitialResponse(r);
     } catch (e) {
       console.error(
-        "Text analysis failed",
+        "Analysis failed",
         e instanceof Error ? e.name : "UnknownError",
       );
       const fallbackResponse: AnalysisResponse = {
@@ -197,6 +218,7 @@ function Home() {
               embedded
               scanSignal={scanSignal}
               onSnapshotChange={handleImageSnapshot}
+              imageGetterRef={imageGetterRef}
             />
           </Suspense>
           }
@@ -217,7 +239,7 @@ function Home() {
           />
         )}
 
-        {response && submittedText.trim() && (
+        {response && (
           <ResultView
             response={response}
             onReset={handleReset}
@@ -702,6 +724,23 @@ function ResultView({
       <Card title="분석 요약">
         <p className="text-sm leading-relaxed">{result.summary}</p>
       </Card>
+
+      {/* Image findings */}
+      {result.image_findings && result.image_findings.length > 0 && (
+        <Card title="AI 사진 분석">
+          <ul className="space-y-2">
+            {result.image_findings.map((f, i) => (
+              <li key={i} className="flex gap-2 text-sm leading-relaxed">
+                <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+                <span>{f}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-3 text-[11px] text-muted-foreground">
+            사진 속 시각적 단서 기반 추정입니다. 실제 신원·주소·소속을 단정하지 않습니다.
+          </p>
+        </Card>
+      )}
 
       {/* Priority actions */}
       {result.priority_actions.length > 0 && (
